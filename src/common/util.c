@@ -53,6 +53,7 @@
 #include "valgrind_internal.h"
 #include "util.h"
 #include "out.h"
+#include "valgrind_internal.h"
 
 #define	PROCMAXLEN 2048 /* maximum expected line length in /proc files */
 
@@ -143,7 +144,7 @@ util_set_alloc_funcs(void *(*malloc_func)(size_t size),
  * mappings.  It is not an error if mmap() ignores the hint and chooses
  * different address.
  */
-static char *
+char *
 util_map_hint(size_t len)
 {
 	FILE *fp;
@@ -218,7 +219,6 @@ util_map(int fd, size_t len, int cow)
 	LOG(3, "fd %d len %zu cow %d", fd, len, cow);
 
 	void *addr = util_map_hint(len);
-
 	if ((base = mmap(addr, len, PROT_READ|PROT_WRITE,
 			(cow) ? MAP_PRIVATE|MAP_NORESERVE : MAP_SHARED,
 					fd, 0)) == MAP_FAILED) {
@@ -703,4 +703,250 @@ util_pool_open(const char *path, size_t *size, size_t minsize)
 	}
 
 	return fd;
+}
+
+/*
+ * util_poolset_parse -- parse pool set config file and open pool set files
+ *
+ * Returns 1 if the file is a valid pool set config file.  In such case,
+ * it opens all the files comprising the pool set, and returns a pointer to
+ * newly allocated structure containing the info of all the parts of the pool,
+ * and all the replicas.
+ * Returns 0 if the file is not a pool set header, and -1 in case of any error.
+ */
+int
+util_poolset_parse(int fd, struct pool_set *set, int create)
+{
+	LOG(3, "fd %d", fd);
+
+	/* XXX */
+	return -1;
+}
+
+/*
+ * util_poolset_create -- create a new memory pool set or a pool file
+ *
+ * On success returns 0 and a pointer to a newly allocated structure
+ * containing the info of all the parts of the pool set and replicas.
+ */
+int
+util_poolset_create(const char *path, size_t poolsize, size_t minsize,
+	mode_t mode, struct pool_set **set)
+{
+	LOG(3, "path %s, poolsize %zu, minsize %zu, mode %d",
+		path, poolsize, minsize, mode);
+
+	int ret = 0;
+	int fd;
+	size_t size = 0;
+
+	if (poolsize != 0) {
+		/* create a new file */
+		fd = util_pool_create(path, poolsize, minsize, mode);
+		if (fd == -1)
+			return -1;
+
+		*set = Malloc(sizeof (struct pool_set) +
+				sizeof (struct pool_set_part));
+		if (*set == NULL) {
+			ret = -1;
+			goto err;
+		}
+
+		(*set)->nparts = 1;
+		(*set)->nreplicas = 1;
+		(*set)->poolsize = poolsize;
+
+		(*set)->part[0].filesize = poolsize;
+		(*set)->part[0].path = path;
+		(*set)->part[0].fd = fd;
+		(*set)->part[0].created = 1;
+
+		/* do not close the file */
+		return 0;
+	}
+
+	/* do not check minsize */
+	if ((fd = util_pool_open(path, &size, 0)) == -1)
+		return -1;
+
+	char signature[POOLSET_HDR_SIG_LEN];
+	if (read(fd, signature, POOLSET_HDR_SIG_LEN) < 0) {
+		ERR("!read %d", fd);
+		ret = -1;
+		goto err;
+	}
+
+	if (strncmp(signature, POOLSET_HDR_SIG, POOLSET_HDR_SIG_LEN)) {
+		LOG(4, "not a pool set header");
+
+		if (size < minsize) {
+			ERR("size %zu smaller than %zu", size, minsize);
+			errno = EINVAL;
+			ret = -1;
+			goto err;
+		}
+
+		*set = Malloc(sizeof (struct pool_set) +
+				sizeof (struct pool_set_part));
+		if (*set == NULL) {
+			ret = -1;
+			goto err;
+		}
+
+		(*set)->nparts = 1;
+		(*set)->nreplicas = 1;
+		(*set)->poolsize = size;
+
+		(*set)->part[0].filesize = size;
+		(*set)->part[0].path = path;
+		(*set)->part[0].fd = fd;
+		(*set)->part[0].created = 0;
+
+		/* do not close the file */
+		return 0;
+	}
+
+	LOG(4, "parsing pool set file");
+	ret = util_poolset_parse(fd, *set, 1);
+
+err:
+	(void) close(fd);
+	return ret;
+}
+
+
+/*
+ * util_poolset_open -- open memory pool set or a pool file
+ *
+ * On success returns 0 and a pointer to a newly allocated structure
+ * containing the info of all the parts of the pool set and replicas.
+ */
+int
+util_poolset_open(const char *path, size_t minsize, struct pool_set **set)
+{
+	LOG(3, "path %s, minsize %zu", path, minsize);
+
+	int ret = 0;
+	int fd;
+	size_t size = 0;
+
+	/* do not check minsize */
+	if ((fd = util_pool_open(path, &size, 0)) == -1)
+		return -1;
+
+	char signature[POOLSET_HDR_SIG_LEN];
+	if (read(fd, signature, POOLSET_HDR_SIG_LEN) < 0) {
+		ERR("!read %d", fd);
+		ret = -1;
+		goto err;
+	}
+
+	if (strncmp(signature, POOLSET_HDR_SIG, POOLSET_HDR_SIG_LEN)) {
+		LOG(4, "not a pool set header");
+
+		if (size < minsize) {
+			ERR("size %zu smaller than %zu", size, minsize);
+			errno = EINVAL;
+			ret = -1;
+			goto err;
+		}
+
+		*set = Malloc(sizeof (struct pool_set) +
+				sizeof (struct pool_set_part));
+		if (*set == NULL) {
+			ret = -1;
+			goto err;
+		}
+
+		(*set)->nparts = 1;
+		(*set)->nreplicas = 1;
+		(*set)->poolsize = size;
+
+		(*set)->part[0].filesize = size;
+		(*set)->part[0].path = path;
+		(*set)->part[0].fd = fd;
+		(*set)->part[0].created = 0;
+
+		/* do not close the file */
+		return 0;
+	}
+
+	LOG(4, "parsing pool set file");
+	ret = util_poolset_parse(fd, *set, 0);
+
+err:
+	(void) close(fd);
+	return ret;
+}
+
+/*
+ * util_poolset_close -- close all the files of the pool set
+ */
+int
+util_poolset_close(struct pool_set *set)
+{
+	LOG(3, "set %p", set);
+
+	for (int i = 0; i < set->nparts; i++) {
+		util_unmap_part(&set->part[i]);
+		if (set->part[i].fd != -1) {
+			(void) close(set->part[i].fd);
+			if (set->part[i].created)
+				unlink(set->part[i].path);
+		}
+	}
+	Free(set);
+	return 0;
+}
+
+/*
+ * util_map_part -- map a part of a pool set
+ */
+int
+util_map_part(struct pool_set_part *part, void *addr, size_t size,
+	off_t offset, int flags)
+{
+	LOG(3, "part %p, size %zu, offset %ju", part, size, offset);
+
+	ASSERTeq((uintptr_t)addr % Pagesize, 0);
+
+	part->size = size ? size : part->filesize - offset;
+	part->size = (part->size + Pagesize - 1) & ~(Pagesize - 1);
+
+	part->addr = mmap(addr, part->size,
+		PROT_READ|PROT_WRITE, flags, part->fd, offset);
+
+	if (part->addr == MAP_FAILED) {
+		ERR("!mmap: %s", part->path);
+		return -1;
+	}
+
+	if (addr != NULL && (flags & MAP_FIXED) && part->addr != addr) {
+		ERR("!mmap: %s", part->path);
+		munmap(addr, size);
+		return -1;
+	}
+
+	VALGRIND_REGISTER_PMEM_MAPPING(part->addr, part->size);
+	VALGRIND_REGISTER_PMEM_FILE(part->fd, part->addr, part->size, offset);
+
+	return 0;
+}
+
+/*
+ * util_unmap_part -- unmap a part of a pool set
+ */
+int
+util_unmap_part(struct pool_set_part *part)
+{
+	LOG(3, "part %p", part);
+
+	if (part->addr != NULL && part->size != 0) {
+		if (munmap(part->addr, part->size) != 0) {
+			ERR("!munmap: %s", part->path);
+		}
+		VALGRIND_REMOVE_PMEM_MAPPING(part->addr, part->size);
+	}
+	return 0;
 }

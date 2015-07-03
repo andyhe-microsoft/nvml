@@ -400,9 +400,10 @@ pmemblk_map_common(int fd, size_t poolsize, size_t bsize, int rdonly,
 		hdrp->compat_features = htole32(BLK_FORMAT_COMPAT);
 		hdrp->incompat_features = htole32(BLK_FORMAT_INCOMPAT);
 		hdrp->ro_compat_features = htole32(BLK_FORMAT_RO_COMPAT);
+
+		uuid_generate(hdrp->poolset_uuid);
 		uuid_generate(hdrp->uuid);
 		/* XXX - pools sets / replicas */
-		uuid_generate(hdrp->poolset_uuid);
 		memcpy(hdrp->prev_part_uuid, hdrp->uuid, POOL_HDR_UUID_LEN);
 		memcpy(hdrp->next_part_uuid, hdrp->uuid, POOL_HDR_UUID_LEN);
 		memcpy(hdrp->prev_repl_uuid, hdrp->uuid, POOL_HDR_UUID_LEN);

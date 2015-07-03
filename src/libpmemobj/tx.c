@@ -1130,7 +1130,7 @@ pmemobj_tx_add_common(struct tx_add_range_args *args)
 
 	if (args->offset < args->pop->heap_offset ||
 		(args->offset + args->size) >
-		(args->pop->heap_offset + args->pop->heap_size)) {
+		(args->pop->heap_offset + args->pop->total_heap_size)) {
 		ERR("object outside of heap");
 		return EINVAL;
 	}

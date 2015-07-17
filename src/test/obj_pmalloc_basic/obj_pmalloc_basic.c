@@ -146,7 +146,6 @@ test_mock_pool_allocs()
 	mock_pop->is_pmem = 0;
 	mock_pop->heap_offset = sizeof (struct mock_pop);
 	mock_pop->heap_size = MOCK_POOL_SIZE - mock_pop->heap_offset;
-	mock_pop->total_heap_size = mock_pop->heap_size;
 	mock_pop->persist = (persist_fn)pmem_msync;
 	mock_pop->nlanes = 1;
 	mock_pop->lanes_offset = sizeof (PMEMobjpool);

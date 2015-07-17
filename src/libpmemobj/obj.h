@@ -119,7 +119,6 @@ struct pmemobjpool {
 	struct lane *lanes;
 	struct object_store *store; /* object store */
 	uint64_t uuid_lo;
-	uint64_t total_heap_size; /* pool set heap size */
 
 	persist_fn persist;	/* persist function */
 	flush_fn flush;		/* flush function */

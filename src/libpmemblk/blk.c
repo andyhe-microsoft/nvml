@@ -520,11 +520,11 @@ pmemblk_create(const char *path, size_t bsize, size_t poolsize,
 	int fd;
 	if (poolsize != 0) {
 		/* create a new memory pool file */
-		fd = util_pool_create(path, poolsize, PMEMBLK_MIN_POOL, mode);
+		fd = util_file_create(path, poolsize, PMEMBLK_MIN_POOL, mode);
 		created = 1;
 	} else {
 		/* open an existing file */
-		fd = util_pool_open(path, &poolsize, PMEMBLK_MIN_POOL);
+		fd = util_file_open(path, &poolsize, PMEMBLK_MIN_POOL);
 	}
 	if (fd == -1)
 		return NULL;	/* errno set by util_pool_create/open() */
@@ -548,7 +548,7 @@ pmemblk_open(const char *path, size_t bsize)
 	size_t poolsize = 0;
 	int fd;
 
-	if ((fd = util_pool_open(path, &poolsize, PMEMBLK_MIN_POOL)) == -1)
+	if ((fd = util_file_open(path, &poolsize, PMEMBLK_MIN_POOL)) == -1)
 		return NULL;	/* errno set by util_pool_open() */
 
 	return pmemblk_map_common(fd, poolsize, bsize, 0, 0, 0);
@@ -698,7 +698,7 @@ pmemblk_check(const char *path)
 	size_t poolsize = 0;
 	int fd;
 
-	if ((fd = util_pool_open(path, &poolsize, PMEMBLK_MIN_POOL)) == -1)
+	if ((fd = util_file_open(path, &poolsize, PMEMBLK_MIN_POOL)) == -1)
 		return -1;	/* errno set by util_pool_open() */
 
 	/* map the pool read-only */

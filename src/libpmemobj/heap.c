@@ -160,7 +160,7 @@ heap_zone_init(PMEMobjpool *pop, uint32_t zone_id)
 {
 	struct zone *z = &pop->heap->layout->zones[zone_id];
 	uint32_t size_idx = get_zone_size_idx(zone_id, pop->heap->max_zone,
-			pop->total_heap_size);
+			pop->heap_size);
 
 	heap_chunk_init(pop, &z->chunk_headers[0], CHUNK_TYPE_FREE, size_idx);
 
@@ -875,7 +875,7 @@ heap_boot(PMEMobjpool *pop)
 		goto error_heap_malloc;
 	}
 
-	h->max_zone = heap_max_zone(pop->total_heap_size);
+	h->max_zone = heap_max_zone(pop->heap_size);
 	h->zones_exhausted = 0;
 	h->layout = heap_get_layout(pop);
 	for (int i = 0; i < MAX_RUN_LOCKS; ++i)
@@ -927,11 +927,11 @@ heap_write_header(struct heap_header *hdr, size_t size)
 int
 heap_init(PMEMobjpool *pop)
 {
-	if (pop->total_heap_size < HEAP_MIN_SIZE)
+	if (pop->heap_size < HEAP_MIN_SIZE)
 		return EINVAL;
 
 	struct heap_layout *layout = heap_get_layout(pop);
-	heap_write_header(&layout->header, pop->total_heap_size);
+	heap_write_header(&layout->header, pop->heap_size);
 	pmem_msync(&layout->header, sizeof (struct heap_header));
 
 	return 0;
@@ -1041,12 +1041,12 @@ heap_verify_zone(struct zone *zone)
 int
 heap_check(PMEMobjpool *pop)
 {
-	if (pop->total_heap_size < HEAP_MIN_SIZE)
+	if (pop->heap_size < HEAP_MIN_SIZE)
 		return EINVAL;
 
 	struct heap_layout *layout = heap_get_layout(pop);
 
-	if (pop->total_heap_size != layout->header.size)
+	if (pop->heap_size != layout->header.size)
 		return EINVAL;
 
 	int ok = 0;

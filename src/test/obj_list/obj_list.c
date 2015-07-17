@@ -191,7 +191,6 @@ FUNC_MOCK_RUN_DEFAULT {
 
 	Pop->heap_offset = HEAP_OFFSET;
 	Pop->heap_size = Pop->size - Pop->heap_offset;
-	Pop->total_heap_size = Pop->heap_size;
 	uint64_t heap_offset = HEAP_OFFSET;
 
 	Heap_offset = (uint64_t *)((uintptr_t)Pop + heap_offset);

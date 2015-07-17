@@ -40,8 +40,6 @@
 #include <unistd.h>
 #include <errno.h>
 #include <stdint.h>
-#include <uuid/uuid.h>
-#include <time.h>
 #include <endian.h>
 #include <stdlib.h>
 #include <setjmp.h>
@@ -125,109 +123,86 @@ pmemobj_get_uuid_lo(PMEMobjpool *pop)
 	return uuid_lo;
 }
 
-#define	PART(set, i)\
-	((set)->part[(i) % (set)->nparts])
-
-#define	HDR(set, i)\
-	((struct pool_hdr *)(PART(set, i).addr))
-
 /*
- * pmemobj_header_create -- (internal) create header of a single pool set file
+ * pmemobj_descr_create -- (internal) create obj pool descriptor
  */
 static int
-pmemobj_header_create(struct pool_set *set, int i)
+pmemobj_descr_create(struct pmemobjpool *pop, const char *layout,
+	size_t poolsize)
 {
-	LOG(3, "set %p, part %i", set, i);
+	LOG(3, "pop %p layout %s", pop, layout);
+
+	ASSERTeq(poolsize % Pagesize, 0);
 
 	/* opaque info lives at the beginning of mapped memory pool */
-	struct pmemobjpool *pop = set->part[i].addr;
-	struct pool_hdr *hdrp = &pop->hdr;
+	void *dscp = (void *)((uintptr_t)(&pop->hdr) +
+				sizeof (struct pool_hdr));
 
-	/* check if the pool header is all zeros */
-	if (!util_is_zeroed(hdrp, sizeof (*hdrp))) {
-		ERR("Non-empty file detected");
-		errno = EINVAL;
+	/* create the persistent part of pool's descriptor */
+	memset(dscp, 0, OBJ_DSC_P_SIZE);
+	if (layout)
+		strncpy(pop->layout, layout, PMEMOBJ_MAX_LAYOUT - 1);
+
+	/* initialize run_id, it will be incremented later */
+	pop->run_id = 0;
+	pmem_msync(&pop->run_id, sizeof (pop->run_id));
+
+	pop->lanes_offset = OBJ_LANES_OFFSET;
+	pop->nlanes = OBJ_NLANES;
+
+	/* zero all lanes */
+	void *lanes_layout = (void *)((uintptr_t)pop +
+						pop->lanes_offset);
+
+	memset(lanes_layout, 0,
+		pop->nlanes * sizeof (struct lane_layout));
+	pmem_msync(lanes_layout, pop->nlanes *
+		sizeof (struct lane_layout));
+
+	/* initialization of the obj_store */
+	pop->obj_store_offset = pop->lanes_offset +
+		pop->nlanes * sizeof (struct lane_layout);
+	pop->obj_store_size = (PMEMOBJ_NUM_OID_TYPES + 1) *
+		sizeof (struct object_store_item);
+		/* + 1 - for root object */
+	void *store = (void *)((uintptr_t)pop + pop->obj_store_offset);
+	memset(store, 0, pop->obj_store_size);
+	pmem_msync(store, pop->obj_store_size);
+
+	pop->heap_offset = pop->obj_store_offset + pop->obj_store_size;
+	pop->heap_offset = (pop->heap_offset + Pagesize - 1) & ~(Pagesize - 1);
+	pop->heap_size = poolsize - pop->heap_offset;
+
+	/* initialize heap prior to storing the checksum */
+	if ((errno = heap_init(pop)) != 0) {
+		ERR("!heap_init");
 		return -1;
 	}
 
-	/* create pool's header */
-	strncpy(hdrp->signature, OBJ_HDR_SIG, POOL_HDR_SIG_LEN);
-	hdrp->major = htole32(OBJ_FORMAT_MAJOR);
-	hdrp->compat_features = htole32(OBJ_FORMAT_COMPAT);
-	hdrp->incompat_features = htole32(OBJ_FORMAT_INCOMPAT);
-	hdrp->ro_compat_features = htole32(OBJ_FORMAT_RO_COMPAT);
+	util_checksum(dscp, OBJ_DSC_P_SIZE, &pop->checksum, 1);
 
-	memcpy(hdrp->poolset_uuid, set->uuid, POOL_HDR_UUID_LEN);
-
-	memcpy(hdrp->uuid, PART(set, i).uuid, POOL_HDR_UUID_LEN);
-	memcpy(hdrp->prev_part_uuid, PART(set, i - 1).uuid, POOL_HDR_UUID_LEN);
-	memcpy(hdrp->next_part_uuid, PART(set, i + 1).uuid, POOL_HDR_UUID_LEN);
-
-	/* XXX - replicas */
-	memcpy(hdrp->prev_repl_uuid, PART(set, 0).uuid, POOL_HDR_UUID_LEN);
-	memcpy(hdrp->next_repl_uuid, PART(set, 0).uuid, POOL_HDR_UUID_LEN);
-
-	hdrp->crtime = htole64((uint64_t)time(NULL));
-
-	if (util_get_arch_flags(&hdrp->arch_flags)) {
-		ERR("Reading architecture flags failed\n");
-		errno = EINVAL;
-		return -1;
-	}
-
-	hdrp->arch_flags.alignment_desc =
-		htole64(hdrp->arch_flags.alignment_desc);
-	hdrp->arch_flags.e_machine =
-		htole16(hdrp->arch_flags.e_machine);
-
-	util_checksum(hdrp, sizeof (*hdrp), &hdrp->checksum, 1);
-
-	/* store pool's header */
-	pmem_msync(hdrp, sizeof (*hdrp));
+	/* store the persistent part of pool's descriptor (2kB) */
+	pmem_msync(dscp, OBJ_DSC_P_SIZE);
 
 	return 0;
 }
 
 /*
- * pmemobj_header_check -- (internal) validate header of a single pool set file
+ * pmemobj_descr_check -- (internal) validate obj pool descriptor
  */
 static int
-pmemobj_header_check(struct pool_set *set, int i, const char *layout)
+pmemobj_descr_check(struct pmemobjpool *pop, const char *layout,
+	size_t poolsize)
 {
-	LOG(3, "set %p, part %i, layout %s", set, i, layout);
+	LOG(3, "pop %p layout %s", pop, layout);
 
-	/* opaque info lives at the beginning of mapped memory pool */
-	struct pmemobjpool *pop = set->part[i].addr;
-	struct pool_hdr hdr;
+	struct pool_hdr *hdrp = &pop->hdr;
 
-	void *dscp = (void *)((uintptr_t)(&pop->hdr) +
+	void *dscp = (void *)((uintptr_t)(hdrp) +
 				sizeof (struct pool_hdr));
 
-	memcpy(&hdr, &pop->hdr, sizeof (hdr));
-
-	if (!util_convert_hdr(&hdr)) {
-		errno = EINVAL;
-		return -1;
-	}
-
-	/*
-	 * valid header found
-	 */
-	if (strncmp(hdr.signature, OBJ_HDR_SIG, POOL_HDR_SIG_LEN)) {
-		ERR("wrong pool type: \"%s\"", hdr.signature);
-		errno = EINVAL;
-		return -1;
-	}
-
-	if (hdr.major != OBJ_FORMAT_MAJOR) {
-		ERR("obj pool version %d (library expects %d)",
-			hdr.major, OBJ_FORMAT_MAJOR);
-		errno = EINVAL;
-		return -1;
-	}
-
-	if (util_check_arch_flags(&hdr.arch_flags)) {
-		ERR("wrong architecture flags");
+	if (!util_checksum(dscp, OBJ_DSC_P_SIZE, &pop->checksum, 0)) {
+		ERR("invalid checksum of pool descriptor");
 		errno = EINVAL;
 		return -1;
 	}
@@ -241,39 +216,12 @@ pmemobj_header_check(struct pool_set *set, int i, const char *layout)
 		return -1;
 	}
 
-	if (!util_checksum(dscp, OBJ_DSC_P_SIZE, &pop->checksum, 0)) {
-		ERR("invalid checksum of pool descriptor");
+	if (pop->heap_offset + pop->heap_size != poolsize) {
+		ERR("heap size does not match pool size: %zu != %zu",
+			pop->heap_offset + pop->heap_size, poolsize);
 		errno = EINVAL;
 		return -1;
 	}
-
-	/* check pool set linkage */
-	if (memcmp(HDR(set, i - 1)->uuid, hdr.prev_part_uuid,
-						POOL_HDR_UUID_LEN) ||
-	    memcmp(HDR(set, i + 1)->uuid, hdr.next_part_uuid,
-						POOL_HDR_UUID_LEN)) {
-		ERR("wrong UUID");
-		errno = EINVAL;
-		return -1;
-	}
-
-	/* XXX - check replicas linkage */
-	if (memcmp(HDR(set, 0)->uuid, hdr.prev_repl_uuid, POOL_HDR_UUID_LEN) ||
-	    memcmp(HDR(set, 0)->uuid, hdr.next_repl_uuid, POOL_HDR_UUID_LEN)) {
-		ERR("wrong UUID");
-		errno = EINVAL;
-		return -1;
-	}
-
-	/* XXX check rest of required metadata */
-
-	int retval = util_feature_check(&hdr, OBJ_FORMAT_INCOMPAT,
-						OBJ_FORMAT_RO_COMPAT,
-						OBJ_FORMAT_COMPAT);
-	if (retval < 0)
-	    return -1;
-	else if (retval == 0)
-	    set->part[i].rdonly = 1;
 
 	if (pop->heap_offset % Pagesize ||
 	    pop->heap_size % Pagesize) {
@@ -282,76 +230,6 @@ pmemobj_header_check(struct pool_set *set, int i, const char *layout)
 		errno = EINVAL;
 		return -1;
 	}
-
-	set->part[i].heap_offset = pop->heap_offset;
-	set->part[i].heap_size = pop->heap_size;
-
-	return 0;
-}
-
-/*
- * pmemobj_descr_create -- (internal) create descriptor of a pool set file
- */
-static int
-pmemobj_descr_create(struct pool_set *set, int i, const char *layout)
-{
-	LOG(3, "set %p, part %d, layout %s", set, i, layout);
-
-	/* opaque info lives at the beginning of mapped memory pool */
-	struct pmemobjpool *pop = set->part[i].addr;
-
-	void *dscp = (void *)((uintptr_t)(&pop->hdr) +
-				sizeof (struct pool_hdr));
-
-	/* create the persistent part of pool's descriptor */
-	memset(dscp, 0, OBJ_DSC_P_SIZE);
-	if (layout)
-		strncpy(pop->layout, layout, PMEMOBJ_MAX_LAYOUT - 1);
-	pop->lanes_offset = OBJ_LANES_OFFSET;
-	pop->nlanes = 0;
-	pop->obj_store_offset = OBJ_LANES_OFFSET;
-	pop->obj_store_size = 0;
-
-	/* only for the first part of the pool set */
-	if (i == 0) {
-		/* initialize run_id, it will be incremented later */
-		pop->run_id = 0;
-		pmem_msync(&pop->run_id, sizeof (pop->run_id));
-
-		pop->nlanes = OBJ_NLANES;
-
-		/* zero all lanes */
-		void *lanes_layout = (void *)((uintptr_t)pop +
-							pop->lanes_offset);
-
-		memset(lanes_layout, 0,
-			pop->nlanes * sizeof (struct lane_layout));
-		pmem_msync(lanes_layout, pop->nlanes *
-			sizeof (struct lane_layout));
-
-		/* initialization of the obj_store */
-		pop->obj_store_offset = pop->lanes_offset +
-			pop->nlanes * sizeof (struct lane_layout);
-		pop->obj_store_size = (PMEMOBJ_NUM_OID_TYPES + 1) *
-			sizeof (struct object_store_item);
-			/* + 1 - for root object */
-		void *store = (void *)((uintptr_t)pop + pop->obj_store_offset);
-		memset(store, 0, pop->obj_store_size);
-		pmem_msync(store, pop->obj_store_size);
-	}
-
-	pop->heap_offset = pop->obj_store_offset + pop->obj_store_size;
-	pop->heap_offset = (pop->heap_offset + Pagesize - 1) & ~(Pagesize - 1);
-	pop->heap_size = set->part[i].filesize - pop->heap_offset;
-	pop->heap_size = pop->heap_size & ~(Pagesize - 1);
-
-	util_checksum(dscp, OBJ_DSC_P_SIZE, &pop->checksum, 1);
-
-	/* store the persistent part of pool's descriptor (2kB) */
-	pmem_msync(dscp, OBJ_DSC_P_SIZE);
-
-	set->part[i].heap_offset = pop->heap_offset;
-	set->part[i].heap_size = pop->heap_size;
 
 	return 0;
 }
@@ -405,8 +283,6 @@ pmemobj_runtime_init(PMEMobjpool *pop, int rdonly, int is_pmem)
 		return -1;
 	}
 
-	/* XXX the rest of run-time info */
-
 	/*
 	 * If possible, turn off all permissions on the pool header page.
 	 *
@@ -434,7 +310,6 @@ pmemobj_create(const char *path, const char *layout, size_t poolsize,
 			path, layout, poolsize, mode);
 
 	int oerrno;
-	int flags = MAP_SHARED;
 
 	/* check length of layout */
 	if (layout && (strlen(layout) >= PMEMOBJ_MAX_LAYOUT)) {
@@ -443,127 +318,40 @@ pmemobj_create(const char *path, const char *layout, size_t poolsize,
 		return NULL;
 	}
 
+	/* XXX - repeat for each replica */
+
+	PMEMobjpool *pop;
 	struct pool_set *set;
-	int ret = util_poolset_create(path, poolsize, PMEMOBJ_MIN_POOL,
-				mode, &set);
-	if (ret < 0) {
-		LOG(2, "cannot open pool set");
+	if ((pop = util_pool_create(path, poolsize, PMEMOBJ_MIN_POOL,
+			mode, &set, sizeof (struct pmemobjpool),
+			OBJ_HDR_SIG, OBJ_FORMAT_MAJOR,
+			OBJ_FORMAT_COMPAT, OBJ_FORMAT_INCOMPAT,
+			OBJ_FORMAT_RO_COMPAT)) == NULL) {
+		LOG(2, "cannot create pool set");
 		return NULL;
 	}
 
-	/* 1) reserve memory range in process address space */
-	void *addr = util_map_hint(set->poolsize); /* XXX - randomize? */
-	if (addr == NULL) {
-		ERR("cannot find a contiguous region of given size");
-		goto err2;
-	}
-
-	/* generate pool set UUID */
-	uuid_generate(set->uuid);
-
-	/* generate UUID's for newly created files */
-	for (int i = 0; i < set->nparts; i++)
-		uuid_generate(set->part[i].uuid);
-
-	/* 2a) map the entire first part of the pool */
-	PMEMobjpool *pop;
-	if (util_map_part(&set->part[0], addr, set->poolsize, 0, flags) != 0) {
-		LOG(2, "pool mapping failed - part #0");
-		goto err2;
-	}
-
-	pop = set->part[0].addr;
-
-	VALGRIND_REGISTER_PMEM_MAPPING(set->part[0].addr, set->poolsize);
-	VALGRIND_REGISTER_PMEM_FILE(set->part[0].fd,
-				set->part[0].addr, set->poolsize, 0);
 	VALGRIND_REMOVE_PMEM_MAPPING(&pop->addr,
 			sizeof (struct pmemobjpool) -
 			sizeof (struct pool_hdr) -
 			OBJ_DSC_P_SIZE);
 
-	pop->addr = set->part[0].addr;
+	pop->addr = pop;
 	pop->size = set->poolsize;
-	pop->total_heap_size = 0;
 
-	(void) close(set->part[0].fd);
-	set->part[0].fd = -1;
-
-	addr += set->part[0].size;
-
-	/* 2b) map all the remaining headers - don't care about the address */
-	for (int i = 1; i < set->nparts; i++) {
-		if (util_map_part(&set->part[i], NULL,
-				sizeof (struct pmemobjpool), 0, flags) != 0) {
-			LOG(2, "header mapping failed - part #%d", i);
-			goto err;
-		}
-	}
-
-	int is_pmem = pmem_is_pmem(set->part[0].addr, set->part[0].size);
-
-	/* 3) create headers, set UUID's, calculate heap_offset/heap_size */
-	for (int i = 0; i < set->nparts; i++) {
-		if (pmemobj_header_create(set, i) != 0) {
-			LOG(2, "header creation failed - part #%d", i);
-			goto err;
-		}
-
-		if (pmemobj_descr_create(set, i, layout) != 0) {
-			LOG(2, "descriptor creation failed - part #%d", i);
-			goto err;
-		}
-
-		pop->total_heap_size += set->part[i].heap_size;
-	}
-
-	/* 4) unmap headers */
-	/* 5) map the remaining parts of the heap (4K-aligned) */
-	for (int i = 1; i < set->nparts; i++) {
-		/* unmap header */
-		if (util_unmap_part(&set->part[i]) != 0) {
-			LOG(2, "header unmapping failed - part #%d", i);
-		}
-
-		/* map heap */
-		if (util_map_part(&set->part[i], addr,
-				set->part[i].heap_size,
-				set->part[i].heap_offset,
-				flags | MAP_FIXED) != 0) {
-			LOG(2, "heap mapping failed - part #%d", i);
-			goto err;
-		}
-
-		pop->total_heap_size += set->part[i].heap_size;
-
-		(void) close(set->part[i].fd);
-		set->part[i].fd = -1;
-
-		is_pmem &= pmem_is_pmem(addr, set->part[i].heap_size);
-
-		addr += set->part[i].heap_size;
-	}
-
-	/*
-	 * XXX - make sure the hdr checksum(s) are stored AFTER
-	 * successful heap initialization.
-	 */
-	if ((errno = heap_init(pop)) != 0) {
-		ERR("!heap_init");
+	/* create pool descriptor */
+	if (pmemobj_descr_create(pop, layout, set->poolsize) != 0) {
+		LOG(2, "descriptor creation failed");
 		goto err;
 	}
 
-	/* 6) XXX - repeat steps #3-4 for each replica */
-
-	/* 7) initialize runtime parts - lanes, obj stores, is_pmem, etc. */
-	if (pmemobj_runtime_init(pop, 0, is_pmem) != 0) {
+	/* initialize runtime parts - lanes, obj stores, is_pmem, etc. */
+	if (pmemobj_runtime_init(pop, 0, set->is_pmem) != 0) {
 		ERR("pool initialization failed");
 		goto err;
 	}
 
-	/* 9) XXX - update func pointers to enable replication */
-
-	Free(set);
+	/* XXX - update func pointers to enable replication */
 
 	LOG(3, "pop %p", pop);
 	return pop;
@@ -573,12 +361,7 @@ err:
 	oerrno = errno;
 	VALGRIND_REMOVE_PMEM_MAPPING(pop->addr, pop->size);
 	util_unmap(pop->addr, pop->size);
-	errno = oerrno;
-
-err2:
-	LOG(4, "close pool set files");
-	oerrno = errno;
-	util_poolset_close(set);
+	util_poolset_close(set, 1);
 	errno = oerrno;
 	return NULL;
 }
@@ -608,114 +391,47 @@ pmemobj_open_common(const char *path, const char *layout, int rdonly)
 	LOG(3, "path %s layout %s", path, layout);
 
 	int oerrno;
-	int flags = rdonly ? MAP_PRIVATE|MAP_NORESERVE : MAP_SHARED;
 
+	/* XXX - repeat for each replica */
+
+	PMEMobjpool *pop;
 	struct pool_set *set;
-	int ret = util_poolset_open(path, PMEMOBJ_MIN_POOL, &set);
-	if (ret < 0) {
-		LOG(2, "cannot open pool set");
+	if ((pop = util_pool_open(path, rdonly, PMEMOBJ_MIN_POOL,
+			&set, sizeof (struct pmemobjpool),
+			OBJ_HDR_SIG, OBJ_FORMAT_MAJOR,
+			OBJ_FORMAT_COMPAT, OBJ_FORMAT_INCOMPAT,
+			OBJ_FORMAT_RO_COMPAT)) == NULL) {
+		LOG(2, "cannot create pool set");
 		return NULL;
 	}
 
-	/* 1) reserve memory range in process address space */
-	void *addr = util_map_hint(set->poolsize); /* XXX - randomize */
-	if (addr == NULL) {
-		ERR("cannot find a contiguous region of given size");
-		goto err2;
-	}
-
-	/* 2a) map the entire first part of the pool */
-	PMEMobjpool *pop;
-	if (util_map_part(&set->part[0], addr, set->poolsize, 0, flags) != 0) {
-		LOG(2, "pool mapping failed - part #0");
-		goto err2;
-	}
-
-	pop = set->part[0].addr;
-
-	VALGRIND_REGISTER_PMEM_MAPPING(set->part[0].addr, set->poolsize);
-	VALGRIND_REGISTER_PMEM_FILE(set->part[0].fd,
-				set->part[0].addr, set->poolsize, 0);
-	VALGRIND_REMOVE_PMEM_MAPPING(&pop->addr,
+	VALGRIND_REMOVE_PMEM_MAPPING(pop,
 			sizeof (struct pmemobjpool) -
 			sizeof (struct pool_hdr) -
 			OBJ_DSC_P_SIZE);
 
-	pop->addr = set->part[0].addr;
+	pop->addr = pop;
 	pop->size = set->poolsize;
-	pop->total_heap_size = pop->heap_size;
 
-	(void) close(set->part[0].fd);
-	set->part[0].fd = -1;
-
-	addr += set->part[0].size;
-
-	/* 2b) map all the remaining headers - don't care about the address */
-	for (int i = 1; i < set->nparts; i++) {
-		if (util_map_part(&set->part[i], NULL,
-				sizeof (struct pmemobjpool), 0, flags) != 0) {
-			LOG(2, "header mapping failed - part #%d", i);
-			goto err;
-		}
+	if (pmemobj_descr_check(pop, layout, set->poolsize) != 0) {
+		LOG(2, "descriptor check failed");
+		goto err;
 	}
 
-	int is_pmem = pmem_is_pmem(set->part[0].addr, set->part[0].size);
-	rdonly |= set->part[0].rdonly;
-
-	/* 3) check headers, check UUID's, read heap_offset/heap_size */
-	for (int i = 0; i < set->nparts; i++) {
-		if (pmemobj_header_check(set, i, layout) != 0) {
-			LOG(2, "header check failed - part #%d", i);
-			goto err;
-		}
-	}
-
-	/* 4) unmap headers */
-	/* 5) map the remaining parts of the heap (4K-aligned) */
-	for (int i = 1; i < set->nparts; i++) {
-		/* unmap header */
-		if (util_unmap_part(&set->part[i]) != 0) {
-			LOG(2, "header unmapping failed - part #%d", i);
-		}
-
-		/* map heap */
-		if (util_map_part(&set->part[i], addr,
-				set->part[i].heap_size,
-				set->part[i].heap_offset,
-				flags | MAP_FIXED) != 0) {
-			LOG(2, "heap mapping failed - part #%d", i);
-			goto err;
-		}
-
-		pop->total_heap_size += set->part[i].heap_size;
-
-		(void) close(set->part[i].fd);
-		set->part[i].fd = -1;
-
-		is_pmem &= pmem_is_pmem(addr, set->part[i].heap_size);
-		rdonly |= set->part[i].rdonly;
-
-		addr += set->part[i].heap_size;
-	}
-
-	/* 6) XXX - repeat steps #3-4 for each replica	 */
-
-	/* 7) initialize runtime parts - lanes, obj stores, is_pmem, etc. */
-	if (pmemobj_runtime_init(pop, rdonly, is_pmem) != 0) {
+	/* initialize runtime parts - lanes, obj stores, is_pmem, etc. */
+	if (pmemobj_runtime_init(pop, rdonly, set->is_pmem) != 0) {
 		ERR("pool initialization failed");
 		goto err;
 	}
 
-	/* 8) recovery */
 	/* XXX - sync replicas */
+
 	if (pmemobj_recover(pop) != 0) {
 		ERR("pool recovery failed");
 		goto err;
 	}
 
-	/* 9) XXX - update func pointers to enable replication */
-
-	Free(set);
+	/* XXX - update func pointers to enable replication */
 
 	LOG(3, "pop %p", pop);
 	return pop;
@@ -725,12 +441,7 @@ err:
 	oerrno = errno;
 	VALGRIND_REMOVE_PMEM_MAPPING(pop->addr, pop->size);
 	util_unmap(pop->addr, pop->size);
-	errno = oerrno;
-
-err2:
-	LOG(4, "close pool set files");
-	oerrno = errno;
-	util_poolset_close(set);
+	util_poolset_close(set, 0);
 	errno = oerrno;
 	return NULL;
 }
@@ -770,12 +481,10 @@ pmemobj_close(PMEMobjpool *pop)
 		ERR("!cuckoo_remove");
 	}
 
-	/* XXX stub */
-
+	/* cleanup run-time state */
 	if ((errno = heap_cleanup(pop)) != 0)
 		ERR("!heap_cleanup");
 
-	/* cleanup run-time state */
 	if ((errno = lane_cleanup(pop)) != 0)
 		ERR("!lane_cleanup");
 

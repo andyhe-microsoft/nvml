@@ -54,7 +54,7 @@ main(int argc, char *argv[])
 	for (int arg = 2; arg < argc; arg++) {
 		size_t size = 0;
 		int fd;
-		if ((fd = util_pool_open(argv[arg], &size, minsize)) == -1)
+		if ((fd = util_file_open(argv[arg], &size, minsize)) == -1)
 			OUT("!%s: util_pool_open", argv[arg]);
 		else {
 			OUT("%s: open, len %zu", argv[arg], size);

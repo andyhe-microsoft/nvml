@@ -58,7 +58,7 @@ FUNC_MOCK_RUN_DEFAULT {
 	struct heap_header *hheader =
 		(struct heap_header *)((uint64_t)pop + pop->heap_offset);
 	hheader->offset = pop->heap_offset + sizeof (struct heap_header);
-	hheader->size   = pop->total_heap_size - sizeof (struct heap_header);
+	hheader->size   = pop->heap_size - sizeof (struct heap_header);
 	pmem_msync(hheader, sizeof (*hheader));
 	return 0;
 }

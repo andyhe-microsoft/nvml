@@ -66,7 +66,6 @@ test_heap()
 	PMEMobjpool *pop = &mpop->p;
 	memset(pop, 0, MOCK_POOL_SIZE);
 	pop->heap_size = MOCK_POOL_SIZE - sizeof (PMEMobjpool);
-	pop->total_heap_size = pop->heap_size;
 	pop->heap_offset = (uint64_t)((uint64_t)&mpop->heap - (uint64_t)mpop);
 	pop->persist = (persist_fn)pmem_msync;
 

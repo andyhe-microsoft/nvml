@@ -193,6 +193,7 @@ error_lane_init:
 			ERR("!lane_destroy");
 	Free(pop->lanes);
 	pop->lanes = NULL;
+
 error_lanes_malloc:
 	return err;
 }

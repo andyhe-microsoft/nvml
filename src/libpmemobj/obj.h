@@ -40,8 +40,6 @@
 #define	PMEMOBJ_LOG_LEVEL_VAR "PMEMOBJ_LOG_LEVEL"
 #define	PMEMOBJ_LOG_FILE_VAR "PMEMOBJ_LOG_FILE"
 
-extern unsigned long Pagesize;
-
 /* attributes of the obj memory pool format for the pool header */
 #define	OBJ_HDR_SIG "OBJPOOL"	/* must be 8 bytes including '\0' */
 #define	OBJ_FORMAT_MAJOR 1
@@ -92,6 +90,8 @@ typedef void (*flush_fn)(void *, size_t);
 typedef void (*drain_fn)(void);
 typedef void *(*memcpy_fn)(void *dest, const void *src, size_t len);
 typedef void *(*memset_fn)(void *dest, int c, size_t len);
+
+extern unsigned long Pagesize;
 
 struct pmemobjpool {
 	struct pool_hdr hdr;	/* memory pool header */

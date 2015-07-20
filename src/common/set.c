@@ -56,15 +56,16 @@
 extern unsigned long Pagesize;
 
 /*
- * util_poolset_parse -- parse pool set config file and open pool set files
+ * util_poolset_parse -- (internal) parse pool set config file
  *
+ * Parses the pool set file and opens or creates all the part files.
  * Returns 1 if the file is a valid pool set config file.  In such case,
  * it opens all the files comprising the pool set, and returns a pointer to
  * newly allocated structure containing the info of all the parts of the pool,
  * and all the replicas.
  * Returns 0 if the file is not a pool set header, and -1 in case of any error.
  */
-int
+static int
 util_poolset_parse(int fd, struct pool_set **setp, int create)
 {
 	LOG(3, "fd %d setp %p create %d", fd, setp, create);
@@ -74,12 +75,12 @@ util_poolset_parse(int fd, struct pool_set **setp, int create)
 }
 
 /*
- * util_poolset_create -- create a new memory pool set or a pool file
+ * util_poolset_create -- (internal) create a new memory pool set
  *
  * On success returns 0 and a pointer to a newly allocated structure
  * containing the info of all the parts of the pool set and replicas.
  */
-int
+static int
 util_poolset_create(const char *path, size_t poolsize, size_t minsize,
 	mode_t mode, struct pool_set **setp)
 {
@@ -113,6 +114,7 @@ util_poolset_create(const char *path, size_t poolsize, size_t minsize,
 		set->nparts = 1;
 		set->nreplicas = 1;
 		set->poolsize = set->part[0].filesize;
+		set->zeroed = 1;
 
 		/* do not close the file */
 		return 0;
@@ -156,6 +158,7 @@ util_poolset_create(const char *path, size_t poolsize, size_t minsize,
 		set->nparts = 1;
 		set->nreplicas = 1;
 		set->poolsize = set->part[0].filesize;
+		set->zeroed = 0;
 
 		/* do not close the file */
 		return 0;
@@ -171,12 +174,12 @@ err:
 
 
 /*
- * util_poolset_open -- open memory pool set or a pool file
+ * util_poolset_open -- (internal) open memory pool set
  *
  * On success returns 0 and a pointer to a newly allocated structure
  * containing the info of all the parts of the pool set and replicas.
  */
-int
+static int
 util_poolset_open(const char *path, size_t minsize, struct pool_set **setp)
 {
 	LOG(3, "path %s minsize %zu setp %p", path, minsize, setp);
@@ -237,7 +240,19 @@ err:
 }
 
 /*
+ * util_poolset_free -- ...
+ */
+void
+util_poolset_free(struct pool_set *set)
+{
+	LOG(3, "set %p", set);
+	Free(set);
+}
+
+/*
  * util_poolset_close -- unmap and close all the files of the pool set
+ *
+ * Optionally, it also unlinks the newly created pool set files.
  */
 int
 util_poolset_close(struct pool_set *set, int del)
@@ -246,13 +261,13 @@ util_poolset_close(struct pool_set *set, int del)
 
 	for (int i = 0; i < set->nparts; i++) {
 		util_unmap_part(&set->part[i]);
-		if (set->part[i].fd != -1) {
+		if (set->part[i].fd != -1)
 			(void) close(set->part[i].fd);
-			if (del && set->part[i].created)
-				unlink(set->part[i].path);
-		}
+		if (del && set->part[i].created)
+			unlink(set->part[i].path);
 	}
-	Free(set);
+
+	util_poolset_free(set);
 	return 0;
 }
 

@@ -151,13 +151,15 @@ int util_check_arch_flags(const struct arch_flags *arch_flags);
 #define	POOLSET_HDR_SIG_LEN 11	/* does not NOT include '\0' */
 
 struct pool_set_part {
-	size_t filesize;	/* parser - page aligned */
-	const char *path;	/* parser */
-	int fd;			/* parser */
-	int created;		/* parser - newly created file */
+	/* populated by a pool set file parser */
+	const char *path;	/* valid only at pool open/create */
+	size_t filesize;	/* aligned to page size */
 
-	void *addr;	/* base address of the mapping */
-	size_t size;	/* size of the mapping - page aligned */
+	/* util_poolset_open/create */
+	int fd;
+	int created;		/* indicates newly created (zeroed) file */
+	void *addr;		/* base address of the mapping */
+	size_t size;		/* size of the mapping - page aligned */
 	int rdonly;
 	unsigned char uuid[POOL_HDR_UUID_LEN];
 };
@@ -167,6 +169,7 @@ struct pool_set {
 	unsigned nreplicas;	/* XXX - not used yet */
 	size_t poolsize;	/* total size of all the parts (mappings) */
 	int is_pmem;
+	int zeroed;		/* all the parts are new files */
 	unsigned char uuid[POOL_HDR_UUID_LEN];
 	struct pool_set_part part[];
 };
@@ -187,10 +190,8 @@ int util_file_create(const char *path, size_t size, size_t minsize,
 				mode_t mode);
 int util_file_open(const char *path, size_t *size, size_t minsize);
 
-int util_poolset_create(const char *path, size_t poolsize, size_t minsize,
-	mode_t mode, struct pool_set **setp);
-int util_poolset_open(const char *path, size_t minsize, struct pool_set **setp);
 int util_poolset_close(struct pool_set *set, int del);
+void util_poolset_free(struct pool_set *set);
 
 char *util_map_hint(size_t len);
 

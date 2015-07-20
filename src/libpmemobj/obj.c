@@ -127,10 +127,9 @@ pmemobj_get_uuid_lo(PMEMobjpool *pop)
  * pmemobj_descr_create -- (internal) create obj pool descriptor
  */
 static int
-pmemobj_descr_create(struct pmemobjpool *pop, const char *layout,
-	size_t poolsize)
+pmemobj_descr_create(PMEMobjpool *pop, const char *layout, size_t poolsize)
 {
-	LOG(3, "pop %p layout %s", pop, layout);
+	LOG(3, "pop %p layout %s poolsize %zu", pop, layout, poolsize);
 
 	ASSERTeq(poolsize % Pagesize, 0);
 
@@ -191,14 +190,11 @@ pmemobj_descr_create(struct pmemobjpool *pop, const char *layout,
  * pmemobj_descr_check -- (internal) validate obj pool descriptor
  */
 static int
-pmemobj_descr_check(struct pmemobjpool *pop, const char *layout,
-	size_t poolsize)
+pmemobj_descr_check(PMEMobjpool *pop, const char *layout, size_t poolsize)
 {
-	LOG(3, "pop %p layout %s", pop, layout);
+	LOG(3, "pop %p layout %s poolsize %zu", pop, layout, poolsize);
 
-	struct pool_hdr *hdrp = &pop->hdr;
-
-	void *dscp = (void *)((uintptr_t)(hdrp) +
+	void *dscp = (void *)((uintptr_t)(&pop->hdr) +
 				sizeof (struct pool_hdr));
 
 	if (!util_checksum(dscp, OBJ_DSC_P_SIZE, &pop->checksum, 0)) {
@@ -240,6 +236,8 @@ pmemobj_descr_check(struct pmemobjpool *pop, const char *layout,
 static int
 pmemobj_runtime_init(PMEMobjpool *pop, int rdonly, int is_pmem)
 {
+	LOG(3, "pop %p rdonly %d is_pmem %d", pop, rdonly, is_pmem);
+
 	/* run_id is made unique by incrementing the previous value */
 	pop->run_id += 2;
 	if (pop->run_id == 0)
@@ -306,10 +304,8 @@ PMEMobjpool *
 pmemobj_create(const char *path, const char *layout, size_t poolsize,
 		mode_t mode)
 {
-	LOG(3, "path %s layout %s poolsize %zu mode %d",
+	LOG(3, "path %s layout %s poolsize %zu mode %o",
 			path, layout, poolsize, mode);
-
-	int oerrno;
 
 	/* check length of layout */
 	if (layout && (strlen(layout) >= PMEMOBJ_MAX_LAYOUT)) {
@@ -318,10 +314,11 @@ pmemobj_create(const char *path, const char *layout, size_t poolsize,
 		return NULL;
 	}
 
+	struct pool_set *set;
+
 	/* XXX - repeat for each replica */
 
 	PMEMobjpool *pop;
-	struct pool_set *set;
 	if ((pop = util_pool_create(path, poolsize, PMEMOBJ_MIN_POOL,
 			mode, &set, sizeof (struct pmemobjpool),
 			OBJ_HDR_SIG, OBJ_FORMAT_MAJOR,
@@ -333,8 +330,7 @@ pmemobj_create(const char *path, const char *layout, size_t poolsize,
 
 	VALGRIND_REMOVE_PMEM_MAPPING(&pop->addr,
 			sizeof (struct pmemobjpool) -
-			sizeof (struct pool_hdr) -
-			OBJ_DSC_P_SIZE);
+			((uintptr_t)&pop->addr - (uintptr_t)&pop->hdr));
 
 	pop->addr = pop;
 	pop->size = set->poolsize;
@@ -353,12 +349,14 @@ pmemobj_create(const char *path, const char *layout, size_t poolsize,
 
 	/* XXX - update func pointers to enable replication */
 
+	util_poolset_free(set);
+
 	LOG(3, "pop %p", pop);
 	return pop;
 
 err:
 	LOG(4, "error clean up");
-	oerrno = errno;
+	int oerrno = errno;
 	VALGRIND_REMOVE_PMEM_MAPPING(pop->addr, pop->size);
 	util_unmap(pop->addr, pop->size);
 	util_poolset_close(set, 1);
@@ -372,6 +370,8 @@ err:
 static int
 pmemobj_recover(PMEMobjpool *pop)
 {
+	LOG(3, "pop %p", pop);
+
 	if ((errno = lane_recover(pop)) != 0) {
 		ERR("!lane_recover");
 		return -1;
@@ -388,14 +388,13 @@ pmemobj_recover(PMEMobjpool *pop)
 static PMEMobjpool *
 pmemobj_open_common(const char *path, const char *layout, int rdonly)
 {
-	LOG(3, "path %s layout %s", path, layout);
+	LOG(3, "path %s layout %s rdonly %d", path, layout, rdonly);
 
-	int oerrno;
+	struct pool_set *set;
 
 	/* XXX - repeat for each replica */
 
 	PMEMobjpool *pop;
-	struct pool_set *set;
 	if ((pop = util_pool_open(path, rdonly, PMEMOBJ_MIN_POOL,
 			&set, sizeof (struct pmemobjpool),
 			OBJ_HDR_SIG, OBJ_FORMAT_MAJOR,
@@ -405,10 +404,9 @@ pmemobj_open_common(const char *path, const char *layout, int rdonly)
 		return NULL;
 	}
 
-	VALGRIND_REMOVE_PMEM_MAPPING(pop,
+	VALGRIND_REMOVE_PMEM_MAPPING(&pop->addr,
 			sizeof (struct pmemobjpool) -
-			sizeof (struct pool_hdr) -
-			OBJ_DSC_P_SIZE);
+			((uintptr_t)&pop->addr - (uintptr_t)&pop->hdr));
 
 	pop->addr = pop;
 	pop->size = set->poolsize;
@@ -433,15 +431,17 @@ pmemobj_open_common(const char *path, const char *layout, int rdonly)
 
 	/* XXX - update func pointers to enable replication */
 
+	util_poolset_free(set);
+
 	LOG(3, "pop %p", pop);
 	return pop;
 
 err:
 	LOG(4, "error clean up");
-	oerrno = errno;
+	int oerrno = errno;
 	VALGRIND_REMOVE_PMEM_MAPPING(pop->addr, pop->size);
 	util_unmap(pop->addr, pop->size);
-	util_poolset_close(set, 0);
+	util_poolset_free(set);
 	errno = oerrno;
 	return NULL;
 }
@@ -504,7 +504,7 @@ pmemobj_check(const char *path, const char *layout)
 
 	PMEMobjpool *pop = pmemobj_open_common(path, layout, 1);
 	if (pop == NULL)
-		return -1;	/* errno set by pmemobj_map_common() */
+		return -1;	/* errno set by pmemobj_open_common() */
 
 	int consistent = 1;
 

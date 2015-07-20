@@ -164,14 +164,21 @@ struct pool_set_part {
 	unsigned char uuid[POOL_HDR_UUID_LEN];
 };
 
-struct pool_set {
+struct pool_replica {
 	unsigned nparts;
-	unsigned nreplicas;	/* XXX - not used yet */
-	size_t poolsize;	/* total size of all the parts (mappings) */
-	int is_pmem;
-	int zeroed;		/* all the parts are new files */
-	unsigned char uuid[POOL_HDR_UUID_LEN];
+	size_t repsize;		/* total size of all the parts (mappings) */
+	int is_pmem;		/* true if all the parts are in PMEM */
+	int zeroed;		/* true if all the parts are new files */
 	struct pool_set_part part[];
+};
+
+struct pool_set {
+	unsigned nreplicas;
+	unsigned char uuid[POOL_HDR_UUID_LEN];
+	int rdonly;
+	int zeroed;
+	size_t poolsize;	/* the smallest replica size */
+	struct pool_replica *replica[];
 };
 
 
@@ -199,14 +206,14 @@ int util_map_part(struct pool_set_part *part, void *addr, size_t size,
 	off_t offset, int flags);
 int util_unmap_part(struct pool_set_part *part);
 
-int util_header_create(struct pool_set *set, int i, const char *hdrsig,
+int util_header_create(struct pool_set *set, int r, int i, const char *sig,
 	uint32_t major, uint32_t compat, uint32_t incompat, uint32_t ro_compat);
-int util_header_check(struct pool_set *set, int i, const char *sig,
+int util_header_check(struct pool_set *set, int r, int i, const char *sig,
 	uint32_t major, uint32_t compat, uint32_t incompat, uint32_t ro_compat);
 
-void *util_pool_create(const char *path, size_t poolsize, size_t minsize,
+int util_pool_create(const char *path, size_t poolsize, size_t minsize,
 	mode_t mode, struct pool_set **setp, size_t hdrsize, const char *sig,
 	uint32_t major, uint32_t compat, uint32_t incompat, uint32_t ro_compat);
-void *util_pool_open(const char *path, int rdonly, size_t minsize,
+int util_pool_open(const char *path, int rdonly, size_t minsize,
 	struct pool_set **setp, size_t hdrsize, const char *sig,
 	uint32_t major, uint32_t compat, uint32_t incompat, uint32_t ro_compat);

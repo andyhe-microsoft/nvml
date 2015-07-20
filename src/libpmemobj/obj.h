@@ -120,6 +120,8 @@ struct pmemobjpool {
 	struct object_store *store; /* object store */
 	uint64_t uuid_lo;
 
+	struct pmemobjpool *rep;	/* next replica */
+
 	persist_fn persist;	/* persist function */
 	flush_fn flush;		/* flush function */
 	drain_fn drain;		/* drain function */

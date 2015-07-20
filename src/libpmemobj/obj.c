@@ -212,6 +212,13 @@ pmemobj_descr_check(PMEMobjpool *pop, const char *layout, size_t poolsize)
 		return -1;
 	}
 
+	if (pop->size < poolsize) {
+		ERR("replica size smaller than pool size: %zu < %zu",
+			pop->size, poolsize);
+		errno = EINVAL;
+		return -1;
+	}
+
 	if (pop->heap_offset + pop->heap_size != poolsize) {
 		ERR("heap size does not match pool size: %zu != %zu",
 			pop->heap_offset + pop->heap_size, poolsize);
@@ -231,31 +238,20 @@ pmemobj_descr_check(PMEMobjpool *pop, const char *layout, size_t poolsize)
 }
 
 /*
- * pmemobj_runtime_init -- (internal) initialize runtime part of the pool header
+ * pmemobj_rreplica_init -- (internal) initialize runtime part of the replica
  */
 static int
-pmemobj_runtime_init(PMEMobjpool *pop, int rdonly, int is_pmem)
+pmemobj_replica_init(PMEMobjpool *pop, int is_pmem)
 {
-	LOG(3, "pop %p rdonly %d is_pmem %d", pop, rdonly, is_pmem);
-
-	/* run_id is made unique by incrementing the previous value */
-	pop->run_id += 2;
-	if (pop->run_id == 0)
-		pop->run_id += 2;
-	pmem_msync(&pop->run_id, sizeof (pop->run_id));
+	LOG(3, "pop %p is_pmem %d", pop, is_pmem);
 
 	/*
 	 * Use some of the memory pool area for run-time info.  This
 	 * run-time state is never loaded from the file, it is always
 	 * created here, so no need to worry about byte-order.
 	 */
-	pop->rdonly = rdonly;
-	pop->lanes = NULL;
 	pop->is_pmem = is_pmem;
-
-	pop->uuid_lo = pmemobj_get_uuid_lo(pop);
-	pop->store = (struct object_store *)
-			((uintptr_t)pop + pop->obj_store_offset);
+	pop->rep = NULL;
 
 	if (pop->is_pmem) {
 		pop->persist = pmem_persist;
@@ -271,6 +267,35 @@ pmemobj_runtime_init(PMEMobjpool *pop, int rdonly, int is_pmem)
 		pop->memset_persist = nopmem_memset_persist;
 	}
 
+	return 0;
+}
+
+/*
+ * pmemobj_runtime_init -- (internal) initialize runtime part of the pool header
+ */
+static int
+pmemobj_runtime_init(PMEMobjpool *pop, int rdonly)
+{
+	LOG(3, "pop %p rdonly %d", pop, rdonly);
+
+	/* run_id is made unique by incrementing the previous value */
+	pop->run_id += 2;
+	if (pop->run_id == 0)
+		pop->run_id += 2;
+	pmemobj_persist(pop, &pop->run_id, sizeof (pop->run_id));
+
+	/*
+	 * Use some of the memory pool area for run-time info.  This
+	 * run-time state is never loaded from the file, it is always
+	 * created here, so no need to worry about byte-order.
+	 */
+	pop->rdonly = rdonly;
+	pop->lanes = NULL;
+
+	pop->uuid_lo = pmemobj_get_uuid_lo(pop);
+	pop->store = (struct object_store *)
+			((uintptr_t)pop + pop->obj_store_offset);
+
 	if ((errno = lane_boot(pop)) != 0) {
 		ERR("!lane_boot");
 		return -1;
@@ -281,6 +306,11 @@ pmemobj_runtime_init(PMEMobjpool *pop, int rdonly, int is_pmem)
 		return -1;
 	}
 
+	if ((errno = cuckoo_insert(pools, pop->uuid_lo, pop)) != 0) {
+		ERR("!cuckoo_insert");
+		return -1;
+	}
+
 	/*
 	 * If possible, turn off all permissions on the pool header page.
 	 *
@@ -288,11 +318,6 @@ pmemobj_runtime_init(PMEMobjpool *pop, int rdonly, int is_pmem)
 	 * use. It is not considered an error if this fails.
 	 */
 	util_range_none(pop->addr, sizeof (struct pool_hdr));
-
-	if ((errno = cuckoo_insert(pools, pop->uuid_lo, pop)) != 0) {
-		ERR("!cuckoo_insert");
-		return -1;
-	}
 
 	return 0;
 }
@@ -316,49 +341,77 @@ pmemobj_create(const char *path, const char *layout, size_t poolsize,
 
 	struct pool_set *set;
 
-	/* XXX - repeat for each replica */
-
-	PMEMobjpool *pop;
-	if ((pop = util_pool_create(path, poolsize, PMEMOBJ_MIN_POOL,
+	if (util_pool_create(path, poolsize, PMEMOBJ_MIN_POOL,
 			mode, &set, sizeof (struct pmemobjpool),
 			OBJ_HDR_SIG, OBJ_FORMAT_MAJOR,
 			OBJ_FORMAT_COMPAT, OBJ_FORMAT_INCOMPAT,
-			OBJ_FORMAT_RO_COMPAT)) == NULL) {
-		LOG(2, "cannot create pool set");
+			OBJ_FORMAT_RO_COMPAT) != 0) {
+		LOG(2, "cannot create pool or pool set");
 		return NULL;
 	}
 
-	VALGRIND_REMOVE_PMEM_MAPPING(&pop->addr,
+	ASSERT(set->nreplicas > 0);
+
+	/* calculate pool size - choose the smallest replica size */
+	set->poolsize = ~0;
+	for (int r = 0; r < set->nreplicas; r++) {
+		struct pool_replica *rep = set->replica[r];
+		if (rep->repsize < set->poolsize)
+			set->poolsize = rep->repsize;
+	}
+
+	PMEMobjpool *pop;
+	for (int r = 0; r < set->nreplicas; r++) {
+		struct pool_replica *rep = set->replica[r];
+		pop = rep->part[0].addr;
+
+		VALGRIND_REMOVE_PMEM_MAPPING(&pop->addr,
 			sizeof (struct pmemobjpool) -
 			((uintptr_t)&pop->addr - (uintptr_t)&pop->hdr));
 
-	pop->addr = pop;
-	pop->size = set->poolsize;
+		pop->addr = pop;
+		pop->size = rep->repsize;
 
-	/* create pool descriptor */
-	if (pmemobj_descr_create(pop, layout, set->poolsize) != 0) {
-		LOG(2, "descriptor creation failed");
-		goto err;
+		/* create pool descriptor */
+		if (pmemobj_descr_create(pop, layout, set->poolsize) != 0) {
+			LOG(2, "descriptor creation failed");
+			goto err;
+		}
+
+		/* initialize replica runtime - is_pmem, funcs, ... */
+		if (pmemobj_replica_init(pop, rep->is_pmem) != 0) {
+			ERR("pool initialization failed");
+			goto err;
+		}
+
+		/* link replicas */
+		if (r < set->nreplicas - 1)
+			pop->rep = set->replica[r + 1]->part[0].addr;
 	}
 
-	/* initialize runtime parts - lanes, obj stores, is_pmem, etc. */
-	if (pmemobj_runtime_init(pop, 0, set->is_pmem) != 0) {
+	pop = set->replica[0]->part[0].addr;
+
+	/* initialize runtime parts - lanes, obj stores, ... */
+	if (pmemobj_runtime_init(pop, set->rdonly) != 0) {
 		ERR("pool initialization failed");
 		goto err;
 	}
 
-	/* XXX - update func pointers to enable replication */
+	LOG(3, "pop %p", pop);
 
 	util_poolset_free(set);
 
-	LOG(3, "pop %p", pop);
 	return pop;
 
 err:
 	LOG(4, "error clean up");
 	int oerrno = errno;
-	VALGRIND_REMOVE_PMEM_MAPPING(pop->addr, pop->size);
-	util_unmap(pop->addr, pop->size);
+	for (int r = 0; r < set->nreplicas; r++) {
+		struct pool_replica *rep = set->replica[r];
+		VALGRIND_REMOVE_PMEM_MAPPING(rep->part[0].addr,
+						rep->part[0].size);
+		util_unmap(rep->part[0].addr, rep->part[0].size);
+	}
 	util_poolset_close(set, 1);
 	errno = oerrno;
 	return NULL;
@@ -382,42 +435,62 @@ pmemobj_recover(PMEMobjpool *pop)
 /*
  * pmemobj_open_common -- open a transactional memory pool (set)
  *
- * This routine does all the work, but takes a rdonly flag so internal
+ * This routine does all the work, but takes a cow flag so internal
  * calls can map a read-only pool if required.
  */
 static PMEMobjpool *
-pmemobj_open_common(const char *path, const char *layout, int rdonly)
+pmemobj_open_common(const char *path, const char *layout, int cow)
 {
-	LOG(3, "path %s layout %s rdonly %d", path, layout, rdonly);
+	LOG(3, "path %s layout %s cow %d", path, layout, cow);
 
 	struct pool_set *set;
 
-	/* XXX - repeat for each replica */
-
-	PMEMobjpool *pop;
-	if ((pop = util_pool_open(path, rdonly, PMEMOBJ_MIN_POOL,
+	if (util_pool_open(path, cow, PMEMOBJ_MIN_POOL,
 			&set, sizeof (struct pmemobjpool),
 			OBJ_HDR_SIG, OBJ_FORMAT_MAJOR,
 			OBJ_FORMAT_COMPAT, OBJ_FORMAT_INCOMPAT,
-			OBJ_FORMAT_RO_COMPAT)) == NULL) {
-		LOG(2, "cannot create pool set");
+			OBJ_FORMAT_RO_COMPAT) != 0) {
+		LOG(2, "cannot open pool or pool set");
 		return NULL;
 	}
 
-	VALGRIND_REMOVE_PMEM_MAPPING(&pop->addr,
+	ASSERT(set->nreplicas > 0);
+
+	/* all replicas must have the same size */
+	set->poolsize = set->replica[0]->repsize;
+
+	PMEMobjpool *pop;
+	for (int r = 0; r < set->nreplicas; r++) {
+		struct pool_replica *rep = set->replica[r];
+		pop = rep->part[0].addr;
+
+		VALGRIND_REMOVE_PMEM_MAPPING(&pop->addr,
 			sizeof (struct pmemobjpool) -
 			((uintptr_t)&pop->addr - (uintptr_t)&pop->hdr));
 
-	pop->addr = pop;
-	pop->size = set->poolsize;
+		pop->addr = pop;
+		pop->size = rep->repsize;
 
-	if (pmemobj_descr_check(pop, layout, set->poolsize) != 0) {
-		LOG(2, "descriptor check failed");
-		goto err;
+		if (pmemobj_descr_check(pop, layout, set->poolsize) != 0) {
+			LOG(2, "descriptor check failed");
+			goto err;
+		}
+
+		/* initialize replica runtime - is_pmem, funcs, ... */
+		if (pmemobj_replica_init(pop, rep->is_pmem) != 0) {
+			ERR("pool initialization failed");
+			goto err;
+		}
+
+		/* link replicas */
+		if (r < set->nreplicas - 1)
+			pop->rep = set->replica[r + 1]->part[0].addr;
 	}
 
-	/* initialize runtime parts - lanes, obj stores, is_pmem, etc. */
-	if (pmemobj_runtime_init(pop, rdonly, set->is_pmem) != 0) {
+	pop = set->replica[0]->part[0].addr;
+
+	/* initialize runtime parts - lanes, obj stores, ... */
+	if (pmemobj_runtime_init(pop, set->rdonly) != 0) {
 		ERR("pool initialization failed");
 		goto err;
 	}
@@ -431,16 +504,21 @@ pmemobj_open_common(const char *path, const char *layout, int rdonly)
 
 	/* XXX - update func pointers to enable replication */
 
+	LOG(3, "pop %p", pop);
+
 	util_poolset_free(set);
 
-	LOG(3, "pop %p", pop);
 	return pop;
 
 err:
 	LOG(4, "error clean up");
 	int oerrno = errno;
-	VALGRIND_REMOVE_PMEM_MAPPING(pop->addr, pop->size);
-	util_unmap(pop->addr, pop->size);
+	for (int r = 0; r < set->nreplicas; r++) {
+		struct pool_replica *rep = set->replica[r];
+		VALGRIND_REMOVE_PMEM_MAPPING(rep->part[0].addr,
+						rep->part[0].size);
+		util_unmap(rep->part[0].addr, rep->part[0].size);
+	}
 	util_poolset_free(set);
 	errno = oerrno;
 	return NULL;
@@ -968,6 +1046,12 @@ void *
 pmemobj_memcpy_persist(PMEMobjpool *pop, void *dest, const void *src,
 	size_t len)
 {
+	PMEMobjpool *rep = pop->rep;
+	while (rep) {
+		void *rdest = (char *)rep + (uintptr_t)dest - (uintptr_t)pop;
+		rep->memcpy_persist(rdest, src, len);
+		rep = rep->rep;
+	}
 	return pop->memcpy_persist(dest, src, len);
 }
 
@@ -977,6 +1061,12 @@ pmemobj_memcpy_persist(PMEMobjpool *pop, void *dest, const void *src,
 void *
 pmemobj_memset_persist(PMEMobjpool *pop, void *dest, int c, size_t len)
 {
+	PMEMobjpool *rep = pop->rep;
+	while (rep) {
+		void *rdest = (char *)rep + (uintptr_t)dest - (uintptr_t)pop;
+		rep->memset_persist(rdest, c, len);
+		rep = rep->rep;
+	}
 	return pop->memset_persist(dest, c, len);
 }
 
@@ -986,6 +1076,12 @@ pmemobj_memset_persist(PMEMobjpool *pop, void *dest, int c, size_t len)
 void
 pmemobj_persist(PMEMobjpool *pop, void *addr, size_t len)
 {
+	PMEMobjpool *rep = pop->rep;
+	while (rep) {
+		void *raddr = (char *)rep + (uintptr_t)addr - (uintptr_t)pop;
+		rep->persist(raddr, len);
+		rep = rep->rep;
+	}
 	pop->persist(addr, len);
 }
 
@@ -995,6 +1091,12 @@ pmemobj_persist(PMEMobjpool *pop, void *addr, size_t len)
 void
 pmemobj_flush(PMEMobjpool *pop, void *addr, size_t len)
 {
+	PMEMobjpool *rep = pop->rep;
+	while (rep) {
+		void *raddr = (char *)rep + (uintptr_t)addr - (uintptr_t)pop;
+		rep->flush(raddr, len);
+		rep = rep->rep;
+	}
 	pop->flush(addr, len);
 }
 
@@ -1004,6 +1106,11 @@ pmemobj_flush(PMEMobjpool *pop, void *addr, size_t len)
 void
 pmemobj_drain(PMEMobjpool *pop)
 {
+	PMEMobjpool *rep = pop->rep;
+	while (rep) {
+		rep->drain();
+		rep = rep->rep;
+	}
 	pop->drain();
 }
 

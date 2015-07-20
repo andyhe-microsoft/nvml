@@ -398,71 +398,6 @@ err:
 }
 
 /*
- * pmemblk_open_common -- (internal) open a block memory pool
- *
- * This routine does all the work, but takes a rdonly flag so internal
- * calls can map a read-only pool if required.
- *
- * Passing in bsize == 0 means a valid pool header must exist (which
- * will supply the block size).
- */
-static PMEMblkpool *
-pmemblk_open_common(const char *path, size_t bsize, int rdonly)
-{
-	LOG(3, "path %s bsize %zu rdonly %d", path, bsize, rdonly);
-
-	struct pool_set *set;
-
-	PMEMblkpool *pbp;
-	if ((pbp = util_pool_open(path, rdonly, PMEMBLK_MIN_POOL,
-			&set, sizeof (struct pmemblk),
-			BLK_HDR_SIG, BLK_FORMAT_MAJOR,
-			BLK_FORMAT_COMPAT, BLK_FORMAT_INCOMPAT,
-			BLK_FORMAT_RO_COMPAT)) == NULL) {
-		LOG(2, "cannot create pool set");
-		return NULL;
-	}
-
-	pbp->addr = pbp;
-	pbp->size = set->poolsize;
-
-	VALGRIND_REMOVE_PMEM_MAPPING(&pbp->addr,
-			sizeof (struct pmemblk) -
-			((uintptr_t)&pbp->addr - (uintptr_t)&pbp->hdr));
-
-	if (set->nreplicas != 1) {
-		ERR("replicas not supported");
-		goto err;
-	}
-
-	/* validate pool descriptor */
-	if (pmemblk_descr_check(pbp, &bsize) != 0) {
-		LOG(2, "descriptor check failed");
-		goto err;
-	}
-
-	/* initialize runtime parts */
-	if (pmemblk_runtime_init(pbp, bsize, rdonly, set->is_pmem) != 0) {
-		ERR("pool initialization failed");
-		goto err;
-	}
-
-	util_poolset_free(set);
-
-	LOG(3, "pbp %p", pbp);
-	return pbp;
-
-err:
-	LOG(4, "error clean up");
-	int oerrno = errno;
-	VALGRIND_REMOVE_PMEM_MAPPING(pbp->addr, pbp->size);
-	util_unmap(pbp->addr, pbp->size);
-	util_poolset_free(set);
-	errno = oerrno;
-	return NULL;
-}
-
-/*
  * pmemblk_create -- create a block memory pool
  */
 PMEMblkpool *
@@ -481,36 +416,41 @@ pmemblk_create(const char *path, size_t bsize, size_t poolsize,
 
 	struct pool_set *set;
 
-	PMEMblkpool *pbp;
-	if ((pbp = util_pool_create(path, poolsize, PMEMBLK_MIN_POOL,
+	if (util_pool_create(path, poolsize, PMEMBLK_MIN_POOL,
 			mode, &set, sizeof (struct pmemblk),
 			BLK_HDR_SIG, BLK_FORMAT_MAJOR,
 			BLK_FORMAT_COMPAT, BLK_FORMAT_INCOMPAT,
-			BLK_FORMAT_RO_COMPAT)) == NULL) {
-		LOG(2, "cannot create pool set");
+			BLK_FORMAT_RO_COMPAT) != 0) {
+		LOG(2, "cannot create pool or pool set");
 		return NULL;
 	}
 
+	ASSERT(set->nreplicas > 0);
+
+	struct pool_replica *rep = set->replica[0];
+	PMEMblkpool *pbp = rep->part[0].addr;
+
 	pbp->addr = pbp;
-	pbp->size = set->poolsize;
+	pbp->size = rep->repsize;
 
 	VALGRIND_REMOVE_PMEM_MAPPING(&pbp->addr,
 			sizeof (struct pmemblk) -
 			((uintptr_t)&pbp->addr - (uintptr_t)&pbp->hdr));
 
-	if (set->nreplicas != 1) {
+	if (set->nreplicas > 1) {
 		ERR("replicas not supported");
 		goto err;
 	}
 
 	/* create pool descriptor */
-	if (pmemblk_descr_create(pbp, bsize, set->zeroed) != 0) {
+	/* XXX - use set->zeroed? */
+	if (pmemblk_descr_create(pbp, bsize, rep->zeroed) != 0) {
 		LOG(2, "descriptor creation failed");
 		goto err;
 	}
 
 	/* initialize runtime parts */
-	if (pmemblk_runtime_init(pbp, bsize, 0, set->is_pmem) != 0) {
+	if (pmemblk_runtime_init(pbp, bsize, 0, rep->is_pmem) != 0) {
 		ERR("pool initialization failed");
 		goto err;
 	}
@@ -526,6 +466,76 @@ err:
 	VALGRIND_REMOVE_PMEM_MAPPING(pbp->addr, pbp->size);
 	util_unmap(pbp->addr, pbp->size);
 	util_poolset_close(set, 1);
+	errno = oerrno;
+	return NULL;
+}
+
+
+/*
+ * pmemblk_open_common -- (internal) open a block memory pool
+ *
+ * This routine does all the work, but takes a cow flag so internal
+ * calls can map a read-only pool if required.
+ *
+ * Passing in bsize == 0 means a valid pool header must exist (which
+ * will supply the block size).
+ */
+static PMEMblkpool *
+pmemblk_open_common(const char *path, size_t bsize, int cow)
+{
+	LOG(3, "path %s bsize %zu cow %d", path, bsize, cow);
+
+	struct pool_set *set;
+
+	if (util_pool_open(path, cow, PMEMBLK_MIN_POOL,
+			&set, sizeof (struct pmemblk),
+			BLK_HDR_SIG, BLK_FORMAT_MAJOR,
+			BLK_FORMAT_COMPAT, BLK_FORMAT_INCOMPAT,
+			BLK_FORMAT_RO_COMPAT) != 0) {
+		LOG(2, "cannot open pool or pool set");
+		return NULL;
+	}
+
+	ASSERT(set->nreplicas > 0);
+
+	struct pool_replica *rep = set->replica[0];
+	PMEMblkpool *pbp = rep->part[0].addr;
+
+	pbp->addr = pbp;
+	pbp->size = rep->repsize;
+
+	VALGRIND_REMOVE_PMEM_MAPPING(&pbp->addr,
+			sizeof (struct pmemblk) -
+			((uintptr_t)&pbp->addr - (uintptr_t)&pbp->hdr));
+
+	if (set->nreplicas > 1) {
+		ERR("replicas not supported");
+		goto err;
+	}
+
+	/* validate pool descriptor */
+	if (pmemblk_descr_check(pbp, &bsize) != 0) {
+		LOG(2, "descriptor check failed");
+		goto err;
+	}
+
+	/* initialize runtime parts */
+	if (pmemblk_runtime_init(pbp, bsize, set->rdonly, rep->is_pmem) != 0) {
+		ERR("pool initialization failed");
+		goto err;
+	}
+
+	util_poolset_free(set);
+
+	LOG(3, "pbp %p", pbp);
+	return pbp;
+
+err:
+	LOG(4, "error clean up");
+	int oerrno = errno;
+	VALGRIND_REMOVE_PMEM_MAPPING(pbp->addr, pbp->size);
+	util_unmap(pbp->addr, pbp->size);
+	util_poolset_free(set);
 	errno = oerrno;
 	return NULL;
 }

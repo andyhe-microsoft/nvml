@@ -154,68 +154,6 @@ pmemlog_runtime_init(PMEMlogpool *plp, int rdonly, int is_pmem)
 }
 
 /*
- * pmemlog_open_common -- (internal) open a log memory pool
- *
- * This routine does all the work, but takes a rdonly flag so internal
- * calls can map a read-only pool if required.
- */
-static PMEMlogpool *
-pmemlog_open_common(const char *path, int rdonly)
-{
-	LOG(3, "path %s rdonly %d", path, rdonly);
-
-	struct pool_set *set;
-
-	PMEMlogpool *plp;
-	if ((plp = util_pool_open(path, rdonly, PMEMLOG_MIN_POOL,
-			&set, sizeof (struct pmemlog),
-			LOG_HDR_SIG, LOG_FORMAT_MAJOR,
-			LOG_FORMAT_COMPAT, LOG_FORMAT_INCOMPAT,
-			LOG_FORMAT_RO_COMPAT)) == NULL) {
-		LOG(2, "cannot create pool set");
-		return NULL;
-	}
-
-	plp->addr = plp;
-	plp->size = set->poolsize;
-
-	VALGRIND_REMOVE_PMEM_MAPPING(&plp->addr,
-			sizeof (struct pmemlog) -
-			((uintptr_t)&plp->addr - (uintptr_t)&plp->hdr));
-
-	if (set->nreplicas != 1) {
-		ERR("replicas not supported");
-		goto err;
-	}
-
-	/* validate pool descriptor */
-	if (pmemlog_descr_check(plp, set->poolsize) != 0) {
-		LOG(2, "descriptor check failed");
-		goto err;
-	}
-
-	/* initialize runtime parts */
-	if (pmemlog_runtime_init(plp, rdonly, set->is_pmem) != 0) {
-		ERR("pool initialization failed");
-		goto err;
-	}
-
-	util_poolset_free(set);
-
-	LOG(3, "plp %p", plp);
-	return plp;
-
-err:
-	LOG(4, "error clean up");
-	int oerrno = errno;
-	VALGRIND_REMOVE_PMEM_MAPPING(plp->addr, plp->size);
-	util_unmap(plp->addr, plp->size);
-	util_poolset_free(set);
-	errno = oerrno;
-	return NULL;
-}
-
-/*
  * pmemlog_create -- create a log memory pool
  */
 PMEMlogpool *
@@ -225,36 +163,40 @@ pmemlog_create(const char *path, size_t poolsize, mode_t mode)
 
 	struct pool_set *set;
 
-	PMEMlogpool *plp;
-	if ((plp = util_pool_create(path, poolsize, PMEMLOG_MIN_POOL,
+	if (util_pool_create(path, poolsize, PMEMLOG_MIN_POOL,
 			mode, &set, sizeof (struct pmemlog),
 			LOG_HDR_SIG, LOG_FORMAT_MAJOR,
 			LOG_FORMAT_COMPAT, LOG_FORMAT_INCOMPAT,
-			LOG_FORMAT_RO_COMPAT)) == NULL) {
-		LOG(2, "cannot create pool set");
+			LOG_FORMAT_RO_COMPAT) != 0) {
+		LOG(2, "cannot create pool or pool set");
 		return NULL;
 	}
 
+	ASSERT(set->nreplicas > 0);
+
+	struct pool_replica *rep = set->replica[0];
+	PMEMlogpool *plp = rep->part[0].addr;
+
 	plp->addr = plp;
-	plp->size = set->poolsize;
+	plp->size = rep->repsize;
 
 	VALGRIND_REMOVE_PMEM_MAPPING(&plp->addr,
 			sizeof (struct pmemlog) -
 			((uintptr_t)&plp->addr - (uintptr_t)&plp->hdr));
 
-	if (set->nreplicas != 1) {
+	if (set->nreplicas > 1) {
 		ERR("replicas not supported");
 		goto err;
 	}
 
 	/* create pool descriptor */
-	if (pmemlog_descr_create(plp, set->poolsize) != 0) {
+	if (pmemlog_descr_create(plp, rep->repsize) != 0) {
 		LOG(2, "descriptor creation failed");
 		goto err;
 	}
 
 	/* initialize runtime parts */
-	if (pmemlog_runtime_init(plp, 0, set->is_pmem) != 0) {
+	if (pmemlog_runtime_init(plp, 0, rep->is_pmem) != 0) {
 		ERR("pool initialization failed");
 		goto err;
 	}
@@ -270,6 +212,72 @@ err:
 	VALGRIND_REMOVE_PMEM_MAPPING(plp->addr, plp->size);
 	util_unmap(plp->addr, plp->size);
 	util_poolset_close(set, 1);
+	errno = oerrno;
+	return NULL;
+}
+
+/*
+ * pmemlog_open_common -- (internal) open a log memory pool
+ *
+ * This routine does all the work, but takes a cow flag so internal
+ * calls can map a read-only pool if required.
+ */
+static PMEMlogpool *
+pmemlog_open_common(const char *path, int cow)
+{
+	LOG(3, "path %s cow %d", path, cow);
+
+	struct pool_set *set;
+
+	if (util_pool_open(path, cow, PMEMLOG_MIN_POOL,
+			&set, sizeof (struct pmemlog),
+			LOG_HDR_SIG, LOG_FORMAT_MAJOR,
+			LOG_FORMAT_COMPAT, LOG_FORMAT_INCOMPAT,
+			LOG_FORMAT_RO_COMPAT) != 0) {
+		LOG(2, "cannot open pool or pool set");
+		return NULL;
+	}
+
+	ASSERT(set->nreplicas > 0);
+
+	struct pool_replica *rep = set->replica[0];
+	PMEMlogpool *plp = rep->part[0].addr;
+
+	plp->addr = plp;
+	plp->size = rep->repsize;
+
+	VALGRIND_REMOVE_PMEM_MAPPING(&plp->addr,
+			sizeof (struct pmemlog) -
+			((uintptr_t)&plp->addr - (uintptr_t)&plp->hdr));
+
+	if (set->nreplicas > 1) {
+		ERR("replicas not supported");
+		goto err;
+	}
+
+	/* validate pool descriptor */
+	if (pmemlog_descr_check(plp, rep->repsize) != 0) {
+		LOG(2, "descriptor check failed");
+		goto err;
+	}
+
+	/* initialize runtime parts */
+	if (pmemlog_runtime_init(plp, set->rdonly, rep->is_pmem) != 0) {
+		ERR("pool initialization failed");
+		goto err;
+	}
+
+	util_poolset_free(set);
+
+	LOG(3, "plp %p", plp);
+	return plp;
+
+err:
+	LOG(4, "error clean up");
+	int oerrno = errno;
+	VALGRIND_REMOVE_PMEM_MAPPING(plp->addr, plp->size);
+	util_unmap(plp->addr, plp->size);
+	util_poolset_free(set);
 	errno = oerrno;
 	return NULL;
 }

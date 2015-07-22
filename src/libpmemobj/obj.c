@@ -530,7 +530,7 @@ pmemobj_create(const char *path, const char *layout, size_t poolsize,
 	pop = set->replica[0]->part[0].addr;
 
 	/* initialize runtime parts - lanes, obj stores, ... */
-	if (pmemobj_runtime_init(pop, set->rdonly) != 0) {
+	if (pmemobj_runtime_init(pop, 0) != 0) {
 		ERR("pool initialization failed");
 		goto err;
 	}
@@ -594,6 +594,13 @@ pmemobj_open_common(const char *path, const char *layout, int cow)
 
 	ASSERT(set->nreplicas > 0);
 
+	/* read-only mode is not supported in libpmemobj */
+	if (set->rdonly) {
+		ERR("read-only mode is not supported");
+		errno = EINVAL;
+		goto err;
+	}
+
 	/* all replicas must have the same size */
 	set->poolsize = set->replica[0]->repsize;
 
@@ -628,7 +635,7 @@ pmemobj_open_common(const char *path, const char *layout, int cow)
 	pop = set->replica[0]->part[0].addr;
 
 	/* initialize runtime parts - lanes, obj stores, ... */
-	if (pmemobj_runtime_init(pop, set->rdonly) != 0) {
+	if (pmemobj_runtime_init(pop, 0) != 0) {
 		ERR("pool initialization failed");
 		goto err;
 	}

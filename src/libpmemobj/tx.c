@@ -442,7 +442,8 @@ tx_abort_set(PMEMobjpool *pop, struct lane_tx_layout *layout, int recovery)
 
 		if (recovery) {
 			/* lane recovery */
-			pop->memcpy_persist(pop, OBJ_OFF_TO_PTR(pop, range->offset),
+			pop->memcpy_persist(pop,
+					OBJ_OFF_TO_PTR(pop, range->offset),
 					range->data, range->size);
 		} else {
 			/* aborted transaction */

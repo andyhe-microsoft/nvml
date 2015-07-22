@@ -827,7 +827,7 @@ realloc_constructor(PMEMobjpool *pop, void *ptr, void *arg)
 		size_t cpy_size = rarg->old_size < rarg->new_size ?
 			rarg->old_size : rarg->new_size;
 		memcpy(ptr, rarg->ptr, cpy_size);
-		pop->persist(ptr, cpy_size);
+		pop->persist(pop, ptr, cpy_size);
 	}
 	OUT("realloc_constructor(id = %d)", item->id);
 }

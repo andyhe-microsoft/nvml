@@ -1429,10 +1429,10 @@ list_realloc(PMEMobjpool *pop, struct list_head *oob_head,
 	 * 6. Process the redo log.
 	 */
 	section->obj_size = old_size;
-	pop->persist(&section->obj_size, sizeof (section->obj_size));
+	pop->persist(pop, &section->obj_size, sizeof (section->obj_size));
 
 	section->obj_offset = obj_offset;
-	pop->persist(&section->obj_offset, sizeof (section->obj_offset));
+	pop->persist(pop, &section->obj_offset, sizeof (section->obj_offset));
 
 	/*
 	 * The user must be aware that any changes in
@@ -1463,11 +1463,12 @@ list_realloc(PMEMobjpool *pop, struct list_head *oob_head,
 		 * If realloc in-place failed clear the obj_offset and obj_size.
 		 */
 		section->obj_offset = 0;
-		pop->persist(&section->obj_offset,
+		pop->persist(pop, &section->obj_offset,
 				sizeof (section->obj_offset));
 
 		section->obj_size = 0;
-		pop->persist(&section->obj_size, sizeof (section->obj_size));
+		pop->persist(pop, &section->obj_size,
+				sizeof (section->obj_size));
 
 		/*
 		 * Realloc in place is not possible so we need to perform
@@ -1661,10 +1662,10 @@ list_realloc_move(PMEMobjpool *pop, struct list_head *oob_head_old,
 	 * 6. Process the redo log.
 	 */
 	section->obj_size = old_size;
-	pop->persist(&section->obj_size, sizeof (section->obj_size));
+	pop->persist(pop, &section->obj_size, sizeof (section->obj_size));
 
 	section->obj_offset = obj_offset;
-	pop->persist(&section->obj_offset, sizeof (section->obj_offset));
+	pop->persist(pop, &section->obj_offset, sizeof (section->obj_offset));
 
 	/*
 	 * The user must be aware that any changes in
@@ -1698,11 +1699,12 @@ list_realloc_move(PMEMobjpool *pop, struct list_head *oob_head_old,
 		 * If realloc in-place failed clear the obj_offset and obj_size.
 		 */
 		section->obj_offset = 0;
-		pop->persist(&section->obj_offset,
+		pop->persist(pop, &section->obj_offset,
 				sizeof (section->obj_offset));
 
 		section->obj_size = 0;
-		pop->persist(&section->obj_size, sizeof (section->obj_size));
+		pop->persist(pop, &section->obj_size,
+				sizeof (section->obj_size));
 
 		/*
 		 * Realloc in place is not possible so we need to perform

@@ -109,11 +109,11 @@ redo_log_store_last(PMEMobjpool *pop, struct redo_log *redo, size_t index,
 	redo[index].value = value;
 
 	/* persist all redo log entries */
-	pop->persist(redo, (index + 1) * sizeof (struct redo_log));
+	pop->persist(pop, redo, (index + 1) * sizeof (struct redo_log));
 
 	/* store and persist offset of last entry */
 	redo[index].offset = offset | REDO_FINISH_FLAG;
-	pop->persist(&redo[index].offset, sizeof (redo[index].offset));
+	pop->persist(pop, &redo[index].offset, sizeof (redo[index].offset));
 }
 
 /*
@@ -125,11 +125,11 @@ redo_log_set_last(PMEMobjpool *pop, struct redo_log *redo, size_t index)
 	LOG(15, "redo %p index %zu", redo, index);
 
 	/* persist all redo log entries */
-	pop->persist(redo, (index + 1) * sizeof (struct redo_log));
+	pop->persist(pop, redo, (index + 1) * sizeof (struct redo_log));
 
 	/* set finish flag of last entry and persist */
 	redo[index].offset |= REDO_FINISH_FLAG;
-	pop->persist(&redo[index].offset, sizeof (redo[index].offset));
+	pop->persist(pop, &redo[index].offset, sizeof (redo[index].offset));
 }
 
 /*
@@ -148,7 +148,7 @@ redo_log_process(PMEMobjpool *pop, struct redo_log *redo,
 		val = (uint64_t *)((uintptr_t)pop->addr + redo->offset);
 		*val = redo->value;
 
-		pop->flush(val, sizeof (uint64_t));
+		pop->flush(pop, val, sizeof (uint64_t));
 
 		redo++;
 	}
@@ -157,12 +157,11 @@ redo_log_process(PMEMobjpool *pop, struct redo_log *redo,
 	val = (uint64_t *)((uintptr_t)pop->addr + offset);
 	*val = redo->value;
 
-	pop->flush(val, sizeof (uint64_t));
-	pop->drain();
+	pop->persist(pop, val, sizeof (uint64_t));
 
 	redo->offset = 0;
 
-	pop->persist(&redo->offset, sizeof (redo->offset));
+	pop->persist(pop, &redo->offset, sizeof (redo->offset));
 }
 
 /*

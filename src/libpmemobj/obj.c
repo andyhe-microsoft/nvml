@@ -106,6 +106,128 @@ nopmem_memset_persist(void *dest, int c, size_t len)
 }
 
 /*
+ * obj_norep_memcpy_persist -- (internal) memcpy w/o replication
+ */
+static void *
+obj_norep_memcpy_persist(PMEMobjpool *pop, void *dest, const void *src,
+	size_t len)
+{
+	return pop->memcpy_persist_local(dest, src, len);
+}
+
+/*
+ * obj_norep_memset_persist -- (internal) memset w/o replication
+ */
+static void *
+obj_norep_memset_persist(PMEMobjpool *pop, void *dest, int c, size_t len)
+{
+	return pop->memset_persist_local(dest, c, len);
+}
+
+/*
+ * obj_norep_persist -- (internal) persist w/o replication
+ */
+static void
+obj_norep_persist(PMEMobjpool *pop, void *addr, size_t len)
+{
+	pop->persist_local(addr, len);
+}
+
+/*
+ * obj_norep_flush -- (internal) flush w/o replication
+ */
+static void
+obj_norep_flush(PMEMobjpool *pop, void *addr, size_t len)
+{
+	pop->flush_local(addr, len);
+}
+
+/*
+ * obj_norep_drain -- (internal) drain w/o replication
+ */
+static void
+obj_norep_drain(PMEMobjpool *pop)
+{
+	pop->drain_local();
+}
+
+/*
+ * obj_rep_memcpy_persist -- (internal) memcpy with replication
+ */
+static void *
+obj_rep_memcpy_persist(PMEMobjpool *pop, void *dest, const void *src,
+	size_t len)
+{
+	PMEMobjpool *rep = pop->rep;
+	while (rep) {
+		void *rdest = (char *)rep + (uintptr_t)dest - (uintptr_t)pop;
+		rep->memcpy_persist_local(rdest, src, len);
+		rep = rep->rep;
+	}
+	return pop->memcpy_persist_local(dest, src, len);
+}
+
+/*
+ * obj_rep_memset_persist -- (internal) memset with replication
+ */
+static void *
+obj_rep_memset_persist(PMEMobjpool *pop, void *dest, int c, size_t len)
+{
+	PMEMobjpool *rep = pop->rep;
+	while (rep) {
+		void *rdest = (char *)rep + (uintptr_t)dest - (uintptr_t)pop;
+		rep->memset_persist_local(rdest, c, len);
+		rep = rep->rep;
+	}
+	return pop->memset_persist_local(dest, c, len);
+}
+
+/*
+ * obj_rep_persist -- (internal) persist with replication
+ */
+static void
+obj_rep_persist(PMEMobjpool *pop, void *addr, size_t len)
+{
+	PMEMobjpool *rep = pop->rep;
+	while (rep) {
+		void *raddr = (char *)rep + (uintptr_t)addr - (uintptr_t)pop;
+		rep->memcpy_persist_local(raddr, addr, len);
+		rep = rep->rep;
+	}
+	pop->persist_local(addr, len);
+}
+
+/*
+ * obj_rep_flush -- (internal) flush with replication
+ */
+static void
+obj_rep_flush(PMEMobjpool *pop, void *addr, size_t len)
+{
+	PMEMobjpool *rep = pop->rep;
+	while (rep) {
+		void *raddr = (char *)rep + (uintptr_t)addr - (uintptr_t)pop;
+		memcpy(raddr, addr, len);
+		rep->flush_local(raddr, len);
+		rep = rep->rep;
+	}
+	pop->flush_local(addr, len);
+}
+
+/*
+ * obj_rep_drain -- (internal) drain with replication
+ */
+static void
+obj_rep_drain(PMEMobjpool *pop)
+{
+	PMEMobjpool *rep = pop->rep;
+	while (rep) {
+		rep->drain_local();
+		rep = rep->rep;
+	}
+	pop->drain_local();
+}
+
+/*
  * pmemobj_get_uuid_lo -- (internal) evaluates XOR sum of least significant
  * 8 bytes with most significant 8 bytes.
  */
@@ -254,18 +376,25 @@ pmemobj_replica_init(PMEMobjpool *pop, int is_pmem)
 	pop->rep = NULL;
 
 	if (pop->is_pmem) {
-		pop->persist = pmem_persist;
-		pop->flush = pmem_flush;
-		pop->drain = pmem_drain;
-		pop->memcpy_persist = pmem_memcpy_persist;
-		pop->memset_persist = pmem_memset_persist;
+		pop->persist_local = pmem_persist;
+		pop->flush_local = pmem_flush;
+		pop->drain_local = pmem_drain;
+		pop->memcpy_persist_local = pmem_memcpy_persist;
+		pop->memset_persist_local = pmem_memset_persist;
 	} else {
-		pop->persist = (persist_fn)pmem_msync;
-		pop->flush = (flush_fn)pmem_msync;
-		pop->drain = drain_empty;
-		pop->memcpy_persist = nopmem_memcpy_persist;
-		pop->memset_persist = nopmem_memset_persist;
+		pop->persist_local = (persist_local_fn)pmem_msync;
+		pop->flush_local = (flush_local_fn)pmem_msync;
+		pop->drain_local = drain_empty;
+		pop->memcpy_persist_local = nopmem_memcpy_persist;
+		pop->memset_persist_local = nopmem_memset_persist;
 	}
+
+	/* initially, use variants w/o replication */
+	pop->persist = obj_norep_persist;
+	pop->flush = obj_norep_flush;
+	pop->drain = obj_norep_drain;
+	pop->memcpy_persist = obj_norep_memcpy_persist;
+	pop->memset_persist = obj_norep_memset_persist;
 
 	return 0;
 }
@@ -278,11 +407,20 @@ pmemobj_runtime_init(PMEMobjpool *pop, int rdonly)
 {
 	LOG(3, "pop %p rdonly %d", pop, rdonly);
 
+	if (pop->rep != NULL) {
+		/* switch to functions that replicate data */
+		pop->persist = obj_rep_persist;
+		pop->flush = obj_rep_flush;
+		pop->drain = obj_rep_drain;
+		pop->memcpy_persist = obj_rep_memcpy_persist;
+		pop->memset_persist = obj_rep_memset_persist;
+	}
+
 	/* run_id is made unique by incrementing the previous value */
 	pop->run_id += 2;
 	if (pop->run_id == 0)
 		pop->run_id += 2;
-	pmemobj_persist(pop, &pop->run_id, sizeof (pop->run_id));
+	pop->persist(pop, &pop->run_id, sizeof (pop->run_id));
 
 	/*
 	 * Use some of the memory pool area for run-time info.  This
@@ -652,7 +790,7 @@ constructor_alloc_bytype(PMEMobjpool *pop, void *ptr, void *arg)
 
 	pobj->internal_type = TYPE_ALLOCATED;
 	pobj->user_type = carg->user_type;
-	pop->persist(pobj, OBJ_OOB_SIZE);
+	pop->persist(pop, pobj, OBJ_OOB_SIZE);
 
 	if (carg->constructor)
 		carg->constructor(pop, ptr, carg->arg);
@@ -733,7 +871,7 @@ constructor_zalloc(PMEMobjpool *pop, void *ptr, void *arg)
 
 	struct carg_alloc *carg = arg;
 
-	pop->memset_persist(ptr, 0, carg->size);
+	pop->memset_persist(pop, ptr, 0, carg->size);
 }
 
 /*
@@ -859,7 +997,7 @@ constructor_realloc(PMEMobjpool *pop, void *ptr, void *arg)
 		size_t cpy_size = carg->new_size < carg->old_size ?
 			carg->old_size : carg->new_size;
 
-		pop->memcpy_persist(ptr, carg->ptr, cpy_size);
+		pop->memcpy_persist(pop, ptr, carg->ptr, cpy_size);
 	}
 }
 
@@ -880,14 +1018,14 @@ constructor_zrealloc(PMEMobjpool *pop, void *ptr, void *arg)
 		size_t cpy_size = carg->new_size < carg->old_size ?
 			carg->old_size : carg->new_size;
 
-		pop->memcpy_persist(ptr, carg->ptr, cpy_size);
+		pop->memcpy_persist(pop, ptr, carg->ptr, cpy_size);
 	}
 
 	if (carg->new_size > carg->old_size) {
 		size_t grow_len = carg->new_size - carg->old_size;
 		void *new_data_ptr = (void *)((uintptr_t)ptr + carg->old_size);
 
-		pop->memset_persist(new_data_ptr, 0, grow_len);
+		pop->memset_persist(pop, new_data_ptr, 0, grow_len);
 	}
 }
 
@@ -961,7 +1099,7 @@ constructor_strdup(PMEMobjpool *pop, void *ptr, void *arg)
 	struct carg_strdup *carg = arg;
 
 	/* copy string */
-	pop->memcpy_persist(ptr, carg->s, carg->size);
+	pop->memcpy_persist(pop, ptr, carg->s, carg->size);
 }
 
 /*
@@ -1046,13 +1184,7 @@ void *
 pmemobj_memcpy_persist(PMEMobjpool *pop, void *dest, const void *src,
 	size_t len)
 {
-	PMEMobjpool *rep = pop->rep;
-	while (rep) {
-		void *rdest = (char *)rep + (uintptr_t)dest - (uintptr_t)pop;
-		rep->memcpy_persist(rdest, src, len);
-		rep = rep->rep;
-	}
-	return pop->memcpy_persist(dest, src, len);
+	return pop->memcpy_persist(pop, dest, src, len);
 }
 
 /*
@@ -1061,13 +1193,7 @@ pmemobj_memcpy_persist(PMEMobjpool *pop, void *dest, const void *src,
 void *
 pmemobj_memset_persist(PMEMobjpool *pop, void *dest, int c, size_t len)
 {
-	PMEMobjpool *rep = pop->rep;
-	while (rep) {
-		void *rdest = (char *)rep + (uintptr_t)dest - (uintptr_t)pop;
-		rep->memset_persist(rdest, c, len);
-		rep = rep->rep;
-	}
-	return pop->memset_persist(dest, c, len);
+	return pop->memset_persist(pop, dest, c, len);
 }
 
 /*
@@ -1076,13 +1202,7 @@ pmemobj_memset_persist(PMEMobjpool *pop, void *dest, int c, size_t len)
 void
 pmemobj_persist(PMEMobjpool *pop, void *addr, size_t len)
 {
-	PMEMobjpool *rep = pop->rep;
-	while (rep) {
-		void *raddr = (char *)rep + (uintptr_t)addr - (uintptr_t)pop;
-		rep->persist(raddr, len);
-		rep = rep->rep;
-	}
-	pop->persist(addr, len);
+	pop->persist(pop, addr, len);
 }
 
 /*
@@ -1091,13 +1211,7 @@ pmemobj_persist(PMEMobjpool *pop, void *addr, size_t len)
 void
 pmemobj_flush(PMEMobjpool *pop, void *addr, size_t len)
 {
-	PMEMobjpool *rep = pop->rep;
-	while (rep) {
-		void *raddr = (char *)rep + (uintptr_t)addr - (uintptr_t)pop;
-		rep->flush(raddr, len);
-		rep = rep->rep;
-	}
-	pop->flush(addr, len);
+	pop->flush(pop, addr, len);
 }
 
 /*
@@ -1106,12 +1220,7 @@ pmemobj_flush(PMEMobjpool *pop, void *addr, size_t len)
 void
 pmemobj_drain(PMEMobjpool *pop)
 {
-	PMEMobjpool *rep = pop->rep;
-	while (rep) {
-		rep->drain();
-		rep = rep->rep;
-	}
-	pop->drain();
+	pop->drain(pop);
 }
 
 /*
@@ -1152,12 +1261,12 @@ constructor_alloc_root(PMEMobjpool *pop, void *ptr, void *arg)
 	struct oob_header *ro = OOB_HEADER_FROM_PTR(ptr);
 	struct carg_root *carg = arg;
 
-	pop->memset_persist(ptr, 0, carg->size);
+	pop->memset_persist(pop, ptr, 0, carg->size);
 
 	ro->internal_type = TYPE_ALLOCATED;
 	ro->user_type = POBJ_ROOT_TYPE_NUM;
 	ro->size = carg->size;
-	pop->persist(ro, OBJ_OOB_SIZE);
+	pop->persist(pop, ro, OBJ_OOB_SIZE);
 }
 
 /*

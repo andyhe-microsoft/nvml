@@ -147,7 +147,7 @@ heap_chunk_init(PMEMobjpool *pop, struct chunk_header *hdr,
 		.size_idx = size_idx
 	};
 	*hdr = nhdr; /* write the entire header (8 bytes) at once */
-	pop->persist(hdr, sizeof (*hdr));
+	pop->persist(pop, hdr, sizeof (*hdr));
 
 	heap_chunk_write_footer(hdr, size_idx);
 }
@@ -169,7 +169,7 @@ heap_zone_init(PMEMobjpool *pop, uint32_t zone_id)
 		.magic = ZONE_HEADER_MAGIC,
 	};
 	z->header = nhdr;  /* write the entire header (8 bytes) at once */
-	pop->persist(&z->header, sizeof (z->header));
+	pop->persist(pop, &z->header, sizeof (z->header));
 }
 
 /*
@@ -180,16 +180,16 @@ heap_init_run(PMEMobjpool *pop, struct bucket *b, struct chunk_header *hdr,
 	struct chunk_run *run)
 {
 	run->block_size = bucket_unit_size(b);
-	pop->persist(&run->block_size, sizeof (run->block_size));
+	pop->persist(pop, &run->block_size, sizeof (run->block_size));
 
 	ASSERT(hdr->type == CHUNK_TYPE_FREE);
 	memset(run->bitmap, 0, sizeof (run->bitmap));
 	run->bitmap[bucket_bitmap_nval(b) - 1] = bucket_bitmap_lastval(b);
 
-	pop->persist(run->bitmap, sizeof (run->bitmap));
+	pop->persist(pop, run->bitmap, sizeof (run->bitmap));
 
 	hdr->type = CHUNK_TYPE_RUN;
-	pop->persist(hdr, sizeof (*hdr));
+	pop->persist(pop, hdr, sizeof (*hdr));
 }
 
 /*
@@ -843,7 +843,7 @@ heap_degrade_run_if_empty(PMEMobjpool *pop, struct bucket *b,
 	struct memory_block fm =
 			heap_free_block(pop, defb, m, &mhdr, &op_result);
 	*mhdr = op_result;
-	pop->persist(mhdr, sizeof (*mhdr));
+	pop->persist(pop, mhdr, sizeof (*mhdr));
 
 	if ((err = bucket_insert_block(defb, fm)) != 0) {
 		ERR("Failed to update heap volatile state");

@@ -98,12 +98,12 @@ FUNC_MOCK_RUN_DEFAULT {
 	if (size < hheader->size) {
 		uint64_t *sizep = (uint64_t *)(hheader->pop + hheader->offset);
 		*sizep = size;
-		pop->persist(sizep, sizeof (uint64_t));
+		pop->persist(pop, sizep, sizeof (uint64_t));
 		*off = hheader->offset + sizeof (uint64_t);
-		pop->persist(off, sizeof (uint64_t));
+		pop->persist(pop, off, sizeof (uint64_t));
 		hheader->offset += size + sizeof (uint64_t);
 		hheader->size -= size + sizeof (uint64_t);
-		pop->persist(hheader, sizeof (*hheader));
+		pop->persist(pop, hheader, sizeof (*hheader));
 		return 0;
 	} else
 		return ENOMEM;
@@ -175,9 +175,9 @@ FUNC_MOCK_RUN_DEFAULT {
 	PMEMobjpool *pop = (PMEMobjpool *)hheader->pop;
 	uint64_t *sizep = (uint64_t *)(hheader->pop + *off - sizeof (uint64_t));
 	*off = 0;
-	pop->persist(off, sizeof (uint64_t));
+	pop->persist(pop, off, sizeof (uint64_t));
 	*sizep = 0;
-	pop->persist(sizep, sizeof (uint64_t));
+	pop->persist(pop, sizep, sizeof (uint64_t));
 	return 0;
 }
 FUNC_MOCK_END

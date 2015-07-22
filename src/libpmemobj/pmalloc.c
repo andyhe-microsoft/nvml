@@ -71,7 +71,7 @@ alloc_write_header(PMEMobjpool *pop, struct allocation_header *alloc,
 	alloc->size = size;
 	alloc->zone_id = zone_id;
 
-	pop->persist(alloc, sizeof (*alloc));
+	pop->persist(pop, alloc, sizeof (*alloc));
 }
 
 /*

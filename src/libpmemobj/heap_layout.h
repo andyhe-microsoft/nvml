@@ -37,18 +37,14 @@
 #define	HEAP_MAJOR 1
 #define	HEAP_MINOR 0
 
-#ifndef WIN32
 #define	MAX_CHUNK (UINT16_MAX - 7) /* has to be multiple of 8 */
-#else
-#define	MAX_CHUNK (1024 - 7) /* has to be multiple of 8 */
-#endif
 #define	CHUNKSIZE (1024L * 256)	/* 256 kilobytes */
 #define	MAX_MEMORY_BLOCK_SIZE (MAX_CHUNK * CHUNKSIZE)
 #define	HEAP_SIGNATURE_LEN 16
 #define	HEAP_SIGNATURE "MEMORY_HEAP_HDR\0"
 #define	ZONE_HEADER_MAGIC 0xC3F0A2D2
-#define	ZONE_MIN_SIZE (sizeof (struct zone) - (MAX_CHUNK - 1) * CHUNKSIZE)
-#define	ZONE_MAX_SIZE (sizeof (struct zone))
+#define	ZONE_MAX_SIZE (sizeof (struct zone) + sizeof (struct chunk) * MAX_CHUNK)
+#define	ZONE_MIN_SIZE (ZONE_MAX_SIZE - (MAX_CHUNK - 1) * CHUNKSIZE)
 #define	HEAP_MIN_SIZE (sizeof (struct heap_layout) + ZONE_MIN_SIZE)
 #define	REDO_LOG_SIZE 4
 #define	BITS_PER_VALUE 64
@@ -56,6 +52,10 @@
 #define	RUN_BITMAP_SIZE (BITS_PER_VALUE * MAX_BITMAP_VALUES)
 #define	RUNSIZE (CHUNKSIZE - ((MAX_BITMAP_VALUES + 1) * 8))
 #define	MIN_RUN_SIZE 128
+
+#define	ZID_TO_ZONE(layoutp, zone_id)\
+	((struct zone *)((uintptr_t)(((struct heap_layout *)(layoutp))->zones)\
+					+ ZONE_MAX_SIZE * (zone_id)))
 
 enum chunk_flags {
 	CHUNK_FLAG_ZEROED	=	0x0001,
@@ -96,7 +96,7 @@ struct zone_header {
 struct zone {
 	struct zone_header header;
 	struct chunk_header chunk_headers[MAX_CHUNK];
-	struct chunk chunks[MAX_CHUNK];
+	struct chunk chunks[];
 };
 
 struct heap_header {

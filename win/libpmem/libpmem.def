@@ -52,4 +52,6 @@ EXPORTS
 	pmem_memset_nodrain
 	pmem_check_version
 	pmem_errormsg
+    libpmem_init
+    libpmem_fini
 	DllMain

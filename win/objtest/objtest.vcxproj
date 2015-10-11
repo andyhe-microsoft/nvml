@@ -75,9 +75,9 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
-      <WarningLevel>Level3</WarningLevel>
+      <WarningLevel>Level2</WarningLevel>
       <Optimization>Disabled</Optimization>
-      <PreprocessorDefinitions>_DEBUG;_CONSOLE;WINAPI_PARTITION_SYSTEM;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_DEBUG;_CONSOLE;_CRT_SECURE_NO_WARNINGS;DEBUG;_CRT_USE_WINAPI_FAMILY_DESKTOP_APP;WINAPI_PARTITION_SYSTEM;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>$(ProjectDir)\..\..\src\include;$(ProjectDir)\..\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <CompileAs>CompileAsC</CompileAs>
       <ForcedIncludeFiles>platform.h</ForcedIncludeFiles>
@@ -85,6 +85,8 @@
       <ExceptionHandling>false</ExceptionHandling>
       <BrowseInformation>true</BrowseInformation>
       <DisableSpecificWarnings>4996</DisableSpecificWarnings>
+      <SDLCheck>true</SDLCheck>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>

@@ -22,6 +22,7 @@
     <ClCompile Include="..\libpmem\libpmem_main.c">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Static-Debug|x64'">true</ExcludedFromBuild>
     </ClCompile>
+    <ClCompile Include="..\src\mmap.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\src\common\out.h" />
@@ -106,6 +107,8 @@
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <BrowseInformation>true</BrowseInformation>
       <ForcedUsingFiles />
+      <WarningLevel>Level2</WarningLevel>
+      <SDLCheck>true</SDLCheck>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>

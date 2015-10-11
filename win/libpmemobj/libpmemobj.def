@@ -97,6 +97,10 @@ EXPORTS
 	pmemobj_persist
 	pmemobj_flush
 	pmemobj_drain
-	_pobj_cached_pool DATA
-	_pobj_debug_notice DATA
+	_pobj_cached_pool
+    _pobj_cache_invalidate
+	_pobj_debug_notice
 	DllMain
+    libpmemobj_init
+    libpmemobj_fini
+

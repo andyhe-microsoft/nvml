@@ -182,7 +182,7 @@ clo_parse_single_int(struct benchmark_clo *clo, const char *arg, void *ptr)
 	}
 
 	int64_t tmax = ((int64_t)1 << (8 * clo->type_int.size - 1)) - 1;
-	int64_t tmin = - ((int64_t)1 << (8 * clo->type_int.size - 1));
+	int64_t tmin = -((int64_t)1 << (8 * clo->type_int.size - 1));
 
 	tmax = min(tmax, clo->type_int.max);
 	tmin = max(tmin, clo->type_int.min);
@@ -502,7 +502,7 @@ clo_str_flag(struct benchmark_clo *clo, void *addr, size_t size)
 	if (clo->off + sizeof (bool) > size)
 		return NULL;
 
-	bool flag = *(bool *)(addr + clo->off);
+	bool flag = *(bool *)((char *)addr + clo->off);
 
 	return flag ? "true" : "false";
 }
@@ -516,7 +516,7 @@ clo_str_str(struct benchmark_clo *clo, void *addr, size_t size)
 	if (clo->off + sizeof (char *) > size)
 		return NULL;
 
-	return *(char **)(addr + clo->off);
+	return *(char **)((char *)addr + clo->off);
 }
 
 /*
@@ -528,7 +528,7 @@ clo_str_int(struct benchmark_clo *clo, void *addr, size_t size)
 	if (clo->off + clo->type_int.size > size)
 		return NULL;
 
-	void *val = addr + clo->off;
+	void *val = (char *)addr + clo->off;
 
 	switch (clo->type_int.size) {
 		case 1:
@@ -563,7 +563,7 @@ clo_str_uint(struct benchmark_clo *clo, void *addr, size_t size)
 	if (clo->off + clo->type_uint.size > size)
 		return NULL;
 
-	void *val = addr + clo->off;
+	void *val = (char *)addr + clo->off;
 
 	switch (clo->type_uint.size) {
 		case 1:

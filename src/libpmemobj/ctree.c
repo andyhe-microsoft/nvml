@@ -50,12 +50,10 @@
 
 #define	BIT_IS_SET(n, i) (!!((n) & (1L << (i))))
 
-#define	KEY_LEN 64
-
 /* internal nodes have LSB of the pointer set, leafs do not */
 #define	NODE_IS_INTERNAL(node) (BIT_IS_SET((uintptr_t)(node), 0))
-#define	NODE_INTERNAL_GET(node) ((void *)(node) - 1)
-#define	NODE_INTERNAL_SET(d, node) ((d) = ((void *)(node) + 1))
+#define	NODE_INTERNAL_GET(node) ((void *)((char *)(node) - 1))
+#define	NODE_INTERNAL_SET(d, node) ((d) = (void *)((char *)(node) + 1))
 
 struct node {
 	void *slots[2]; /* slots for either internal or leaf nodes */

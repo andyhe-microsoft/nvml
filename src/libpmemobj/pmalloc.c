@@ -78,8 +78,9 @@ alloc_write_header(PMEMobjpool *pop, struct allocation_header *alloc,
 static struct allocation_header *
 alloc_get_header(PMEMobjpool *pop, uint64_t off)
 {
-	void *ptr = (void *)pop + off;
-	struct allocation_header *alloc = ptr - sizeof (*alloc);
+	void *ptr = (char *)pop + off;
+	struct allocation_header *alloc = (void *)((char *)ptr -
+			sizeof (*alloc));
 
 	return alloc;
 }
@@ -151,17 +152,27 @@ persist_alloc(PMEMobjpool *pop, struct lane_section *lane,
 	uint64_t op_result = 0;
 
 	void *block_data = heap_get_block_data(pop, m);
-	void *datap = block_data + sizeof (struct allocation_header);
+	void *datap = (char *)block_data + sizeof (struct allocation_header);
+	void *userdatap = (char *)datap + data_off;
 
 	ASSERT((uint64_t)block_data % _POBJ_CL_ALIGNMENT == 0);
+
+	/* mark everything (including headers) as accessible */
+	VALGRIND_DO_MAKE_MEM_UNDEFINED(pop, block_data, real_size);
+	/* mark space as allocated */
+	VALGRIND_DO_MEMPOOL_ALLOC(pop, userdatap,
+			real_size -
+			sizeof (struct allocation_header) - data_off);
 
 	alloc_write_header(pop, block_data, m.chunk_id, m.zone_id, real_size);
 
 	if (constructor != NULL)
-		constructor(pop, datap + data_off, arg);
+		constructor(pop, userdatap, arg);
 
-	if ((err = heap_lock_if_run(pop, m)) != 0)
+	if ((err = heap_lock_if_run(pop, m)) != 0) {
+		VALGRIND_DO_MEMPOOL_FREE(pop, userdatap);
 		return err;
+	}
 
 	void *hdr = heap_get_block_header(pop, m, HEAP_OP_ALLOC, &op_result);
 
@@ -191,9 +202,9 @@ persist_alloc(PMEMobjpool *pop, struct lane_section *lane,
  * If successful function returns zero. Otherwise an error number is returned.
  */
 int
-pmalloc(PMEMobjpool *pop, uint64_t *off, size_t size)
+pmalloc(PMEMobjpool *pop, uint64_t *off, size_t size, uint64_t data_off)
 {
-	return pmalloc_construct(pop, off, size, NULL, NULL, 0);
+	return pmalloc_construct(pop, off, size, NULL, NULL, data_off);
 }
 
 /*
@@ -276,9 +287,9 @@ out:
  * If successful function returns zero. Otherwise an error number is returned.
  */
 int
-prealloc(PMEMobjpool *pop, uint64_t *off, size_t size)
+prealloc(PMEMobjpool *pop, uint64_t *off, size_t size, uint64_t data_off)
 {
-	return prealloc_construct(pop, off, size, NULL, NULL, 0);
+	return prealloc_construct(pop, off, size, NULL, NULL, data_off);
 }
 
 /*
@@ -338,9 +349,18 @@ prealloc_construct(PMEMobjpool *pop, uint64_t *off, size_t size,
 		heap_coalesce(pop, blocks, 2, HEAP_OP_ALLOC, &hdr, &op_result);
 
 	void *block_data = heap_get_block_data(pop, m);
-	void *datap = block_data + sizeof (struct allocation_header);
+	void *datap = (char *)block_data + sizeof (struct allocation_header);
+	void *userdatap = (char *)datap + data_off;
+
+	/* mark new part as accessible and undefined */
+	VALGRIND_DO_MAKE_MEM_UNDEFINED(pop, (char *)block_data + alloc->size,
+			real_size - alloc->size);
+	/* resize allocated space */
+	VALGRIND_DO_MEMPOOL_CHANGE(pop, userdatap, userdatap,
+		real_size  - sizeof (struct allocation_header) - data_off);
+
 	if (constructor != NULL)
-		constructor(pop, datap + data_off, arg);
+		constructor(pop, userdatap, arg);
 
 	struct allocator_lane_section *sec =
 		(struct allocator_lane_section *)lane->layout;
@@ -385,7 +405,7 @@ pmalloc_usable_size(PMEMobjpool *pop, uint64_t off)
  * If successful function returns zero. Otherwise an error number is returned.
  */
 int
-pfree(PMEMobjpool *pop, uint64_t *off)
+pfree(PMEMobjpool *pop, uint64_t *off, uint64_t data_off)
 {
 	struct allocation_header *alloc = alloc_get_header(pop, *off);
 
@@ -427,7 +447,7 @@ pfree(PMEMobjpool *pop, uint64_t *off)
 	 * There's no point in rolling back redo log changes because the
 	 * volatile errors don't break the persistent state.
 	 */
-	if (bucket_insert_block(b, res) != 0) {
+	if (bucket_insert_block(pop, b, res) != 0) {
 		ERR("Failed to update the heap volatile state");
 		ASSERT(0);
 	}
@@ -441,6 +461,9 @@ pfree(PMEMobjpool *pop, uint64_t *off)
 		ERR("Failed to degrade run");
 		ASSERT(0);
 	}
+
+	VALGRIND_DO_MEMPOOL_FREE(pop,
+			(char *)alloc + sizeof (*alloc) + data_off);
 
 out:
 	if (lane_release(pop) != 0) {
@@ -502,7 +525,7 @@ lane_allocator_check(PMEMobjpool *pop, struct lane_section_layout *section)
 }
 
 /*
- * lane_allocator_init -- initalizes allocator section
+ * lane_allocator_init -- initializes allocator section
  */
 static int
 lane_allocator_boot(PMEMobjpool *pop)

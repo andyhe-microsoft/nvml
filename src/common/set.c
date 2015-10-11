@@ -728,6 +728,7 @@ util_poolset_create(struct pool_set **setp, const char *path, size_t poolsize,
 		if (fd == -1)
 			return -1;
 
+		/* close the file and open with O_RDWR */
 		*setp = util_poolset_single(path, poolsize, fd, 1);
 		if (*setp == NULL) {
 			ret = -1;
@@ -739,7 +740,7 @@ util_poolset_create(struct pool_set **setp, const char *path, size_t poolsize,
 	}
 
 	/* do not check minsize */
-	if ((fd = util_file_open(path, &size, 0, O_RDWR)) == -1)
+	if ((fd = util_file_open(path, &size, 0, O_RDONLY)) == -1)
 		return -1;
 
 	char signature[POOLSET_HDR_SIG_LEN];
@@ -759,6 +760,11 @@ util_poolset_create(struct pool_set **setp, const char *path, size_t poolsize,
 			ret = -1;
 			goto err;
 		}
+
+		(void) close(fd);
+		size = 0;
+		if ((fd = util_file_open(path, &size, 0, O_RDWR)) == -1)
+			return -1;
 
 		*setp = util_poolset_single(path, size, fd, 0);
 		if (*setp == NULL) {
@@ -802,7 +808,7 @@ util_poolset_open(struct pool_set **setp, const char *path, size_t minsize)
 	size_t size = 0;
 
 	/* do not check minsize */
-	if ((fd = util_file_open(path, &size, 0, O_RDWR)) == -1)
+	if ((fd = util_file_open(path, &size, 0, O_RDONLY)) == -1)
 		return -1;
 
 	char signature[POOLSET_HDR_SIG_LEN];
@@ -822,6 +828,12 @@ util_poolset_open(struct pool_set **setp, const char *path, size_t minsize)
 			ret = -1;
 			goto err;
 		}
+
+		/* close the file and open with O_RDWR */
+		(void) close(fd);
+		size = 0;
+		if ((fd = util_file_open(path, &size, 0, O_RDWR)) == -1)
+			return -1;
 
 		*setp = util_poolset_single(path, size, fd, 0);
 		if (*setp == NULL) {
@@ -862,12 +874,13 @@ err:
  */
 static int
 util_header_create(struct pool_set *set, unsigned repidx, unsigned partidx,
-	const char *sig, uint32_t major, uint32_t compat, uint32_t incompat,
-	uint32_t ro_compat)
+	size_t hdrsize, const char *sig, uint32_t major, uint32_t compat,
+	uint32_t incompat, uint32_t ro_compat)
 {
-	LOG(3, "set %p repidx %u partidx %u sig %s major %u "
+	LOG(3, "set %p repidx %u partidx %u hdrsize %zu sig %s major %u "
 		"compat %#x incompat %#x ro_comapt %#x",
-		set, repidx, partidx, sig, major, compat, incompat, ro_compat);
+		set, repidx, partidx, hdrsize,
+		sig, major, compat, incompat, ro_compat);
 
 	struct pool_replica *rep = set->replica[repidx];
 
@@ -880,6 +893,14 @@ util_header_create(struct pool_set *set, unsigned repidx, unsigned partidx,
 		errno = EINVAL;
 		return -1;
 	}
+
+	/*
+	 * Zero out the pool descriptor - just in case we fail right after
+	 * header checksum is stored.
+	 */
+	void *descp = (void *)((uintptr_t)hdrp + sizeof (*hdrp));
+	memset(descp, 0, hdrsize - sizeof (*hdrp));
+	pmem_msync(descp, hdrsize - sizeof (*hdrp));
 
 	/* create pool's header */
 	strncpy(hdrp->signature, sig, POOL_HDR_SIG_LEN);
@@ -1060,7 +1081,7 @@ util_replica_create(struct pool_set *set, unsigned repidx, int flags,
 
 	/* create headers, set UUID's */
 	for (unsigned p = 0; p < rep->nparts; p++) {
-		if (util_header_create(set, repidx, p, sig, major,
+		if (util_header_create(set, repidx, p, hdrsize, sig, major,
 				compat, incompat, ro_compat) != 0) {
 			LOG(2, "header creation failed - part #%d", p);
 			goto err;
@@ -1074,7 +1095,7 @@ util_replica_create(struct pool_set *set, unsigned repidx, int flags,
 	set->zeroed &= rep->part[0].created;
 
 	size_t mapsize = rep->part[0].filesize & ~(Pagesize - 1);
-	addr = rep->part[0].addr + mapsize;
+	addr = (char *)rep->part[0].addr + mapsize;
 
 	/*
 	 * map the remaining parts of the usable pool space (4K-aligned)
@@ -1092,7 +1113,7 @@ util_replica_create(struct pool_set *set, unsigned repidx, int flags,
 
 		mapsize += rep->part[p].size;
 		set->zeroed &= rep->part[p].created;
-		addr += rep->part[p].size;
+		addr = (char *)addr + rep->part[p].size;
 	}
 
 	rep->is_pmem = pmem_is_pmem(rep->part[0].addr, rep->part[0].size);
@@ -1240,7 +1261,7 @@ util_replica_open(struct pool_set *set, unsigned repidx, int flags,
 	}
 
 	size_t mapsize = rep->part[0].filesize & ~(Pagesize - 1);
-	addr = rep->part[0].addr + mapsize;
+	addr = (char *)rep->part[0].addr + mapsize;
 
 	/*
 	 * map the remaining parts of the usable pool space
@@ -1258,7 +1279,7 @@ util_replica_open(struct pool_set *set, unsigned repidx, int flags,
 			rep->part[p].addr, rep->part[p].size, hdrsize);
 
 		mapsize += rep->part[p].size;
-		addr += rep->part[p].size;
+		addr = (char *)addr + rep->part[p].size;
 	}
 
 	rep->is_pmem = pmem_is_pmem(rep->part[0].addr, rep->part[0].size);

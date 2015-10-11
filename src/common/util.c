@@ -65,22 +65,21 @@
 /*
  * set of macros for determining the alignment descriptor
  */
-#define	DESC_BITS		4
-#define	DESC_MASK		((1 << DESC_BITS) - 1)
+#define	DESC_MASK		((1 << ALIGNMENT_DESC_BITS) - 1)
 #define	alignment_of(t)		offsetof(struct { char c; t x; }, x)
 #define	alignment_desc_of(t)	(((uint64_t)alignment_of(t) - 1) & DESC_MASK)
 #define	alignment_desc()\
-(alignment_desc_of(char)	<<  0 * DESC_BITS) |\
-(alignment_desc_of(short)	<<  1 * DESC_BITS) |\
-(alignment_desc_of(int)		<<  2 * DESC_BITS) |\
-(alignment_desc_of(long)	<<  3 * DESC_BITS) |\
-(alignment_desc_of(long long)	<<  4 * DESC_BITS) |\
-(alignment_desc_of(size_t)	<<  5 * DESC_BITS) |\
-(alignment_desc_of(off_t)	<<  6 * DESC_BITS) |\
-(alignment_desc_of(float)	<<  7 * DESC_BITS) |\
-(alignment_desc_of(double)	<<  8 * DESC_BITS) |\
-(alignment_desc_of(long double)	<<  9 * DESC_BITS) |\
-(alignment_desc_of(void *)	<< 10 * DESC_BITS)
+(alignment_desc_of(char)	<<  0 * ALIGNMENT_DESC_BITS) |\
+(alignment_desc_of(short)	<<  1 * ALIGNMENT_DESC_BITS) |\
+(alignment_desc_of(int)		<<  2 * ALIGNMENT_DESC_BITS) |\
+(alignment_desc_of(long)	<<  3 * ALIGNMENT_DESC_BITS) |\
+(alignment_desc_of(long long)	<<  4 * ALIGNMENT_DESC_BITS) |\
+(alignment_desc_of(size_t)	<<  5 * ALIGNMENT_DESC_BITS) |\
+(alignment_desc_of(off_t)	<<  6 * ALIGNMENT_DESC_BITS) |\
+(alignment_desc_of(float)	<<  7 * ALIGNMENT_DESC_BITS) |\
+(alignment_desc_of(double)	<<  8 * ALIGNMENT_DESC_BITS) |\
+(alignment_desc_of(long double)	<<  9 * ALIGNMENT_DESC_BITS) |\
+(alignment_desc_of(void *)	<< 10 * ALIGNMENT_DESC_BITS)
 
 /* library-wide page size */
 unsigned long Pagesize;
@@ -93,7 +92,8 @@ Free_func Free = free;
 Realloc_func Realloc = realloc;
 Strdup_func Strdup = strdup;
 
-#if defined(USE_VG_PMEMCHECK) || defined(USE_VG_HELGRIND)
+#if defined(USE_VG_PMEMCHECK) || defined(USE_VG_HELGRIND) ||\
+	defined(USE_VG_MEMCHECK)
 /* initialized to true if the process is running inside Valgrind */
 int On_valgrind;
 #endif
@@ -110,7 +110,8 @@ util_init(void)
 	if (Pagesize == 0)
 		Pagesize = (unsigned long) sysconf(_SC_PAGESIZE);
 
-#if defined(USE_VG_PMEMCHECK) || defined(USE_VG_HELGRIND)
+#if defined(USE_VG_PMEMCHECK) || defined(USE_VG_HELGRIND) ||\
+	defined(USE_VG_MEMCHECK)
 	On_valgrind = RUNNING_ON_VALGRIND;
 #endif
 }
@@ -340,8 +341,9 @@ err:
 int
 util_checksum(void *addr, size_t len, uint64_t *csump, int insert)
 {
+	ASSERTeq(len % 4, 0);
 	uint32_t *p32 = addr;
-	uint32_t *p32end = addr + len;
+	uint32_t *p32end = (uint32_t *)((char *)addr + len);
 	uint32_t lo32 = 0;
 	uint32_t hi32 = 0;
 	uint64_t csum;

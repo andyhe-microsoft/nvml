@@ -63,7 +63,14 @@ OBJS=$(SRC:.c=.o)
 LDFLAGS = -L$(LIBS_PATH)
 LDFLAGS += $(EXTRA_LDFLAGS)
 LIBS += -lpmemlog -lpmem -pthread -lm
-CFLAGS = -std=gnu99 -Wall -Werror -Wmissing-prototypes -pthread $(EXTRA_CFLAGS)
+CFLAGS  = -std=gnu99
+CFLAGS += -Wall
+CFLAGS += -Werror
+CFLAGS += -Wmissing-prototypes
+CFLAGS += -Wpointer-arith
+CFLAGS += -Wunused-macros
+CFLAGS += -pthread
+CFLAGS += $(EXTRA_CFLAGS)
 CFLAGS += -I../include
 CFLAGS += $(shell pkg-config --cflags glib-2.0)
 LIBS += $(shell pkg-config --libs glib-2.0)
@@ -72,6 +79,14 @@ ifeq ($(DEBUG),)
 CFLAGS += -O3
 else
 CFLAGS += -ggdb
+endif
+
+GLIB_TEST_PROG="\#include <glib.h>\nint main(){return 0;}"
+GLIB_SILENCE := $(shell printf $(GLIB_TEST_PROG) |\
+	$(CC) $(CFLAGS) -x c -o /dev/null - 2>/dev/null && echo n || echo y)
+
+ifeq ($(GLIB_SILENCE), y)
+CFLAGS += -Wno-unknown-attributes
 endif
 
 default: $(TARGET)

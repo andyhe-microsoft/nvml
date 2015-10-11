@@ -78,6 +78,7 @@ TEST_TYPE = check
 TEST_BUILD = all
 TEST_FS = all
 TEST_TIME = 3m
+MEMCHECK = auto
 
 #
 # This is a helper function to be combined with usage of macros available
@@ -91,7 +92,15 @@ extract_funcs = $(shell \
     awk '{print "-Wl,--wrap="$$0}')
 
 INCS = -I../unittest -I../../include
-CFLAGS = -ggdb -Wall -Werror -Wmissing-prototypes -std=gnu99 -fno-common $(EXTRA_CFLAGS)
+CFLAGS  = -std=gnu99
+CFLAGS += -ggdb
+CFLAGS += -Wall
+CFLAGS += -Werror
+CFLAGS += -Wmissing-prototypes
+CFLAGS += -Wpointer-arith
+CFLAGS += -Wunused-macros
+CFLAGS += -fno-common
+CFLAGS += $(EXTRA_CFLAGS)
 LDFLAGS = -Wl,--warn-common -Wl,--fatal-warnings $(EXTRA_LDFLAGS)
 
 #
@@ -146,10 +155,10 @@ TST=$(shell basename `pwd`)
 TSTCHECKS=$(shell ls -1 TEST* | sort -V)
 
 $(TSTCHECKS): all
-	@cd .. && ./RUNTESTS ${TST} -b $(TEST_BUILD) -t $(TEST_TYPE) -f $(TEST_FS) -o $(TEST_TIME) -s $@
+	@cd .. && ./RUNTESTS ${TST} -b $(TEST_BUILD) -t $(TEST_TYPE) -f $(TEST_FS) -o $(TEST_TIME) -m $(MEMCHECK) -s $@
 
 check: all
-	@cd .. && ./RUNTESTS ${TST} -b $(TEST_BUILD) -t $(TEST_TYPE) -f $(TEST_FS) -o $(TEST_TIME)
+	@cd .. && ./RUNTESTS ${TST} -b $(TEST_BUILD) -t $(TEST_TYPE) -f $(TEST_FS) -o $(TEST_TIME) -m $(MEMCHECK)
 
 pcheck: $(TSTCHECKS)
 

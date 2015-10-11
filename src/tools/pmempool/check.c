@@ -123,7 +123,6 @@ struct pmempool_check_step {
 	bool part;		/* check part files */
 };
 
-#define	BACKUP_SUFFIX	".bak"
 #define	BTT_INFO_SIG	"BTT_ARENA_INFO\0"
 
 /*
@@ -169,7 +168,7 @@ pmempool_check_nsread(void *ns, int lane, void *buf, size_t count,
 		return -1;
 	}
 
-	memcpy(buf, nsc->addr + off, count);
+	memcpy(buf, (char *)nsc->addr + off, count);
 
 	return 0;
 }
@@ -188,7 +187,7 @@ pmempool_check_nswrite(void *ns, int lane, const void *buf, size_t count,
 		return -1;
 	}
 
-	memcpy(nsc->addr + off, buf, count);
+	memcpy((char *)nsc->addr + off, buf, count);
 
 	return 0;
 }
@@ -211,7 +210,7 @@ pmempool_check_nsmap(void *ns, int lane, void **addrp, size_t len,
 	 * Since the entire file is memory-mapped, this callback
 	 * can always provide the entire length requested.
 	 */
-	*addrp = nsc->addr + off;
+	*addrp = (char *)nsc->addr + off;
 
 	return len;
 }
@@ -237,7 +236,7 @@ pmempool_check_nszero(void *ns, int lane, size_t len, off_t off)
 		errno = EINVAL;
 		return -1;
 	}
-	memset(nsc->addr + off, 0, len);
+	memset((char *)nsc->addr + off, 0, len);
 
 	return 0;
 }

@@ -132,7 +132,7 @@ pmemobj_open_mock(const char *fname)
 	close(fd);
 
 	PMEMobjpool *pop = (PMEMobjpool *)addr;
-	VALGRIND_REMOVE_PMEM_MAPPING(addr + sizeof (pop->hdr), 4096);
+	VALGRIND_REMOVE_PMEM_MAPPING((char *)addr + sizeof (pop->hdr), 4096);
 	pop->addr = addr;
 	pop->size = stbuf.st_size;
 	pop->is_pmem = pmem_is_pmem(addr, stbuf.st_size);
@@ -173,7 +173,7 @@ main(int argc, char *argv[])
 	PMEMobjpool *pop = pmemobj_open_mock(argv[1]);
 	ASSERTne(pop, NULL);
 
-	ASSERTeq(util_is_zeroed(pop->addr + PMEMOBJ_POOL_HDR_SIZE,
+	ASSERTeq(util_is_zeroed((char *)pop->addr + PMEMOBJ_POOL_HDR_SIZE,
 			pop->size - PMEMOBJ_POOL_HDR_SIZE), 1);
 
 	char *end = NULL;

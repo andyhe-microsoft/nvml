@@ -45,7 +45,17 @@ vpath %.c $(COMMON)
 
 INCS += -I../include -I../common/
 
-CFLAGS += -std=gnu99 -Wall -Werror -Wmissing-prototypes -pthread -fno-common $(EXTRA_CFLAGS) -DSRCVERSION=\"$(SRCVERSION)\"
+CFLAGS += -std=gnu99
+CFLAGS += -Wall
+CFLAGS += -Werror
+CFLAGS += -Wmissing-prototypes
+CFLAGS += -Wpointer-arith
+CFLAGS += -Wunused-macros
+CFLAGS += -pthread
+CFLAGS += -fno-common
+CFLAGS += $(EXTRA_CFLAGS)
+CFLAGS += -DSRCVERSION=\"$(SRCVERSION)\"
+
 LDFLAGS += -Wl,-z,relro -Wl,--fatal-warnings -Wl,--warn-common $(EXTRA_LDFLAGS)
 
 define arch32_error_msg
@@ -63,16 +73,16 @@ $(error $(arch32_error_msg))
 endif
 
 ifeq ($(shell uname -m), x86_64)
-ifneq ($(wildcard /usr/lib64),)
-LIBDIR = usr/lib64
+ifneq ($(wildcard $(prefix)/lib64),)
+LIBDIR = $(prefix)/lib64
 else
-LIBDIR = usr/lib
+LIBDIR = $(prefix)/lib
 endif
 else
-LIBDIR = usr/lib
+LIBDIR = $(prefix)/lib
 endif
 
-LIBS_DESTDIR = $(DESTDIR)/$(LIBDIR)/$(LIBS_DIR)
+LIBS_DESTDIR = $(DESTDIR)$(LIBDIR)/$(LIBS_DIR)
 
 ifeq ($(DEBUG),1)
 CFLAGS += -O0 -ggdb -DDEBUG

@@ -125,6 +125,9 @@ constructor_tx_alloc(PMEMobjpool *pop, void *ptr, void *arg)
 
 	/* do not report changes to the new object */
 	VALGRIND_ADD_TO_TX(ptr, args->size);
+
+	VALGRIND_DO_MAKE_MEM_NOACCESS(pop, &oobh->padding,
+			sizeof (oobh->padding));
 }
 
 /*
@@ -156,6 +159,9 @@ constructor_tx_zalloc(PMEMobjpool *pop, void *ptr, void *arg)
 
 	/* do not report changes to the new object */
 	VALGRIND_ADD_TO_TX(ptr, args->size);
+
+	VALGRIND_DO_MAKE_MEM_NOACCESS(pop, &oobh->padding,
+			sizeof (oobh->padding));
 
 	memset(ptr, 0, args->size);
 }
@@ -226,6 +232,9 @@ constructor_tx_copy(PMEMobjpool *pop, void *ptr, void *arg)
 	/* do not report changes made to the copy */
 	VALGRIND_ADD_TO_TX(ptr, args->size);
 
+	VALGRIND_DO_MAKE_MEM_NOACCESS(pop, &oobh->padding,
+			sizeof (oobh->padding));
+
 	memcpy(ptr, args->ptr, args->copy_size);
 }
 
@@ -258,6 +267,9 @@ constructor_tx_copy_zero(PMEMobjpool *pop, void *ptr, void *arg)
 
 	/* do not report changes made to the copy */
 	VALGRIND_ADD_TO_TX(ptr, args->size);
+
+	VALGRIND_DO_MAKE_MEM_NOACCESS(pop, &oobh->padding,
+			sizeof (oobh->padding));
 
 	memcpy(ptr, args->ptr, args->copy_size);
 	if (args->size > args->copy_size) {
@@ -397,7 +409,7 @@ tx_restore_range(PMEMobjpool *pop, struct tx_range *range)
 	}
 
 	txr->begin = OBJ_OFF_TO_PTR(pop, range->offset);
-	txr->end = txr->begin + range->size;
+	txr->end = (char *)txr->begin + range->size;
 	SLIST_INSERT_HEAD(&tx_ranges, txr, tx_range);
 
 	struct tx_lock_data *txl;
@@ -407,7 +419,7 @@ tx_restore_range(PMEMobjpool *pop, struct tx_range *range)
 	SLIST_FOREACH(txl, &(runtime->tx_locks), tx_lock) {
 		void *lock_begin = txl->lock.mutex;
 		/* all PMEM locks have the same size */
-		void *lock_end = lock_begin + _POBJ_CL_ALIGNMENT;
+		void *lock_end = (char *)lock_begin + _POBJ_CL_ALIGNMENT;
 
 		SLIST_FOREACH(txr, &tx_ranges, tx_range) {
 			if ((lock_begin >= txr->begin &&
@@ -468,8 +480,9 @@ tx_restore_range(PMEMobjpool *pop, struct tx_range *range)
 		SLIST_REMOVE_HEAD(&tx_ranges, tx_range);
 		/* restore partial range data from snapshot */
 		pop->memcpy_persist(pop, txr->begin,
-				&range->data[txr->begin - dst_ptr],
-				txr->end - txr->begin);
+				&range->data[
+					(char *)txr->begin - (char *)dst_ptr],
+					(char *)txr->end - (char *)txr->begin);
 		Free(txr);
 	}
 }
@@ -579,8 +592,12 @@ tx_pre_commit_alloc(PMEMobjpool *pop, struct lane_tx_layout *layout)
 		size_t size = pmalloc_usable_size(pop,
 				iter.off - OBJ_OOB_SIZE);
 
+		VALGRIND_DO_MAKE_MEM_DEFINED(pop, oobh->padding,
+				sizeof (oobh->padding));
 		/* flush and persist the whole allocated area and oob header */
 		pop->persist(pop, oobh, size);
+		VALGRIND_DO_MAKE_MEM_NOACCESS(pop, oobh->padding,
+				sizeof (oobh->padding));
 	}
 }
 
@@ -1485,7 +1502,7 @@ pmemobj_tx_add_range_direct(void *ptr, size_t size)
 
 	struct tx_add_range_args args = {
 		.pop = lane->pop,
-		.offset = ptr - (void *)lane->pop,
+		.offset = (char *)ptr - (char *)lane->pop,
 		.size = size
 	};
 
@@ -1720,6 +1737,33 @@ lane_transaction_destruct(PMEMobjpool *pop, struct lane_section *section)
 	return 0;
 }
 
+#ifdef USE_VG_MEMCHECK
+/*
+ * tx_abort_register_valgrind -- tells Valgrind about objects from specified
+ *				 undo list
+ */
+static void
+tx_abort_register_valgrind(PMEMobjpool *pop, struct list_head *head)
+{
+	PMEMoid iter = head->pe_first;
+
+	while (!OBJ_OID_IS_NULL(iter)) {
+		/*
+		 * Can't use pmemobj_direct and pmemobj_alloc_usable_size
+		 * because pool has not been registered yet.
+		 */
+		void *p = (char *)pop + iter.off;
+		size_t sz = pmalloc_usable_size(pop,
+				iter.off - OBJ_OOB_SIZE) - OBJ_OOB_SIZE;
+
+		VALGRIND_DO_MEMPOOL_ALLOC(pop, p, sz);
+		VALGRIND_DO_MAKE_MEM_DEFINED(pop, p, sz);
+
+		iter = oob_list_next(pop, head, iter);
+	}
+}
+#endif
+
 /*
  * lane_transaction_recovery -- recovery of transaction lane section
  */
@@ -1743,6 +1787,14 @@ lane_transaction_recovery(PMEMobjpool *pop,
 			ERR("tx_post_commit failed");
 		}
 	} else {
+#ifdef USE_VG_MEMCHECK
+		if (On_valgrind) {
+			tx_abort_register_valgrind(pop, &layout->undo_set);
+			tx_abort_register_valgrind(pop, &layout->undo_alloc);
+			tx_abort_register_valgrind(pop,
+					&layout->undo_set_cache);
+		}
+#endif
 		/* process undo log and restore all operations */
 		tx_abort(pop, layout, 1 /* recovery */);
 	}
@@ -1817,7 +1869,7 @@ lane_transaction_check(PMEMobjpool *pop,
 }
 
 /*
- * lane_transaction_init -- initalizes transaction section
+ * lane_transaction_init -- initializes transaction section
  */
 static int
 lane_transaction_boot(PMEMobjpool *pop)

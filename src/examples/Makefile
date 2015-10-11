@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2014, Intel Corporation
+# Copyright (c) 2014-2015, Intel Corporation
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -33,16 +33,7 @@
 #
 # examples/Makefile -- build the NVM Library examples
 #
+
 DIRS = libpmem libpmemblk libpmemlog libpmemobj libvmem
 
-all:     TARGET = all
-clean:   TARGET = clean
-clobber: TARGET = clobber
-cstyle:  TARGET = cstyle
-
-all clean clobber cstyle: $(DIRS)
-
-$(DIRS):
-	$(MAKE) -C $@ $(TARGET)
-
-.PHONY: all clean clobber cstyle $(DIRS)
+include Makefile.inc

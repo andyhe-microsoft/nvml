@@ -106,8 +106,6 @@ TOID(struct oob_list) List_oob_sec;
 
 TOID(struct oob_item) *Item;
 
-#define	IS_NULL(oid)	(oid.off == 0)
-
 /* usage macros */
 #define	FATAL_USAGE()\
 	FATAL("usage: obj_list <file> [PRnifr]")
@@ -115,8 +113,6 @@ TOID(struct oob_item) *Item;
 	FATAL("usage: obj_list <file> P:<list>")
 #define	FATAL_USAGE_PRINT_REVERSE()\
 	FATAL("usage: obj_list <file> R:<list>")
-#define	FATAL_USAGE_INSERT_NEW()\
-	FATAL("usage: obj_list <file> n[:<where>:<num>[:<id>]]")
 #define	FATAL_USAGE_INSERT()\
 	FATAL("usage: obj_list <file> i:<where>:<num>")
 #define	FATAL_USAGE_REMOVE_FREE()\
@@ -332,7 +328,7 @@ FUNC_MOCK(pmemobj_alloc, PMEMoid, PMEMobjpool *pop, PMEMoid *oidp,
 	FUNC_MOCK_RUN_DEFAULT {
 		PMEMoid oid = {0, 0};
 		oid.pool_uuid_lo = 0;
-		pmalloc(NULL, &oid.off, size);
+		pmalloc(NULL, &oid.off, size, OOB_OFF);
 		oid.off += OOB_OFF;
 		if (oidp) {
 			*oidp = oid;
@@ -347,7 +343,8 @@ FUNC_MOCK_END
  * Allocates the memory using linear allocator.
  * Prints the id of allocated struct oob_item for tracking purposes.
  */
-FUNC_MOCK(pmalloc, int, PMEMobjpool *pop, uint64_t *ptr, size_t size)
+FUNC_MOCK(pmalloc, int, PMEMobjpool *pop, uint64_t *ptr, size_t size,
+		uint64_t data_off)
 	FUNC_MOCK_RUN_DEFAULT {
 		size = 2 * (size - OOB_OFF) + OOB_OFF;
 		uint64_t *alloc_size = (uint64_t *)((uintptr_t)Pop
@@ -380,7 +377,7 @@ FUNC_MOCK_END
  *
  * Just prints freeing struct oob_item id. Doesn't free the memory.
  */
-FUNC_MOCK(pfree, int, PMEMobjpool *pop, uint64_t *ptr)
+FUNC_MOCK(pfree, int, PMEMobjpool *pop, uint64_t *ptr, uint64_t data_off)
 	FUNC_MOCK_RUN_DEFAULT {
 		struct oob_item *item =
 			(struct oob_item *)((uintptr_t)Pop + *ptr);
@@ -424,7 +421,8 @@ FUNC_MOCK_END
 /*
  * prealloc -- prealloc mock
  */
-FUNC_MOCK(prealloc, int, PMEMobjpool *pop, uint64_t *off, size_t size)
+FUNC_MOCK(prealloc, int, PMEMobjpool *pop, uint64_t *off, size_t size,
+		uint64_t data_off)
 	FUNC_MOCK_RUN_DEFAULT {
 		uint64_t *alloc_size = (uint64_t *)((uintptr_t)Pop +
 				*off - sizeof (uint64_t));
@@ -454,7 +452,7 @@ FUNC_MOCK(prealloc_construct, int, PMEMobjpool *pop, uint64_t *off,
 	size_t size, void (*constructor)(PMEMobjpool *pop, void *ptr,
 	void *arg), void *arg, uint64_t data_off)
 	FUNC_MOCK_RUN_DEFAULT {
-		int ret = prealloc(pop, off, size);
+		int ret = prealloc(pop, off, size, data_off);
 		if (!ret) {
 			void *ptr = (void *)((uintptr_t)Pop + *off + data_off);
 			constructor(pop, ptr, arg);

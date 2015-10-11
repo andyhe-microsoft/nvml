@@ -34,11 +34,18 @@
 INCS += -I. -I..
 INCS += -I../..
 INCS += -I../../include
-CFLAGS += -std=gnu99 -Wall -Werror -Wmissing-prototypes -fno-common $(EXTRA_CFLAGS)
+CFLAGS += -std=gnu99
+CFLAGS += -Wall
+CFLAGS += -Werror
+CFLAGS += -Wmissing-prototypes
+CFLAGS += -Wpointer-arith
+CFLAGS += -Wunused-macros
+CFLAGS += -fno-common
+CFLAGS += $(EXTRA_CFLAGS)
 CFLAGS += -O2 -D_FORTIFY_SOURCE=2
 CFLAGS += -DSRCVERSION='"$(SRCVERSION)"'
 LDFLAGS += -Wl,-z,relro -Wl,--warn-common -Wl,--fatal-warnings $(EXTRA_LDFLAGS) -L../../nondebug
-TOOLSDIR=/usr/bin
+TOOLSDIR=$(prefix)/bin
 TARGET_DIR=$(DESTDIR)$(TOOLSDIR)
 BASH_COMP_FILES ?=
 BASH_COMP_DIR =$(DESTDIR)/etc/bash_completion.d/
@@ -84,7 +91,7 @@ endif
 all: $(TARGET) $(TARGET_STATIC_NONDEBUG) $(TARGET_STATIC_DEBUG)
 
 clean:
-	$(RM) $(OBJS)
+	$(RM) $(OBJS) $(CLEAN_FILES)
 
 clobber: clean
 	$(RM) $(TARGET)

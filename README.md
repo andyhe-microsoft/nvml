@@ -8,7 +8,7 @@ For more information, see http://pmem.io.
 
 |**NOTE**|
 |:------:|
-|**These libraries are not yet considered production quality, but they are getting close!  We expect to validate them to production quality by the end of September, 2015.  The libraries are currently validated to "early access" quality, usable for development of pmem-aware applications.  You are encouraged to try them out and give us feedback via our [Google group](http://groups.google.com/group/pmem).**|
+|**These libraries are not yet considered production quality, but they are getting close!  They are currently validated to "alpha" quality, meaning all features pass their tests with no known critical issues.  You are encouraged to try them out and give us feedback via our [Google group](http://groups.google.com/group/pmem).**|
 
 ### The Libraries ###
 
@@ -72,7 +72,7 @@ this command at the top level:
 	$ make
 ```
 
-Once the make completes, all the libraries are built and the examples
+Once the make completes (*), all the libraries are built and the examples
 under `src/examples` are built as well.  You can play with the library
 within the build tree, or install it locally on your machine.  Installing
 the library is more convenient since it installs man pages and libraries
@@ -82,7 +82,14 @@ in the standard system locations:
 	# make install
 ```
 
-To install this library into other locations, you can use
+To install this library into other locations, you can use the
+prefix variable, e.g.:
+```
+	$ make install prefix=/usr/local
+```
+This will install files to /usr/local/lib, /usr/local/include /usr/local/share/man.
+
+To prepare this library for packaging, you can use the
 DESTDIR variable, e.g.:
 ```
 	$ make install DESTDIR=/tmp
@@ -105,6 +112,18 @@ To build dpkg packages on Debian-based distributions:
 	$ make dpkg
 ```
 **Prerequisites:** devscripts
+
+(*) By default all code is built with -Werror flag which fails the whole build
+when compiler emits any warning. It's very useful during development, but can be
+annoying in deployment. If you want to disable -Werror, you can use EXTRA_CFLAGS
+variable:
+```
+	$ make EXTRA_CFLAGS="-Wno-error"
+```
+or
+```
+	$ make EXTRA_CFLAGS="-Wno-error=$(type-of-warning)"
+```
 
 ### Testing the Libraries ###
 
@@ -133,6 +152,8 @@ with the **USE_VG_PMEMCHECK** flag, for example:
 ```
 	$ make EXTRA_CFLAGS=-DUSE_VG_PMEMCHECK
 ```
+For Valgrind memcheck support, supply **USE_VG_MEMCHECK** flag.
+**USE_VALGRIND** flag enables both.
 
 
 ### Contacts ###

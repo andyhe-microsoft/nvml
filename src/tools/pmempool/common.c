@@ -48,15 +48,13 @@
 #include <ctype.h>
 #include <assert.h>
 #include <getopt.h>
+#include <unistd.h>
 
 #include "common.h"
 #include "output.h"
 #include "libpmemblk.h"
 #include "libpmemlog.h"
 #include "libpmemobj.h"
-
-#define	__USE_UNIX98
-#include <unistd.h>
 
 #define	REQ_BUFF_SIZE	2048
 
@@ -755,6 +753,9 @@ util_convert2h_pool_hdr(struct pool_hdr *hdrp)
 	hdrp->compat_features = le32toh(hdrp->compat_features);
 	hdrp->incompat_features = le32toh(hdrp->incompat_features);
 	hdrp->ro_compat_features = le32toh(hdrp->ro_compat_features);
+	hdrp->arch_flags.alignment_desc =
+		le64toh(hdrp->arch_flags.alignment_desc);
+	hdrp->arch_flags.e_machine = le16toh(hdrp->arch_flags.e_machine);
 	hdrp->crtime = le64toh(hdrp->crtime);
 	hdrp->checksum = le64toh(hdrp->checksum);
 }
@@ -768,6 +769,9 @@ util_convert2le_pool_hdr(struct pool_hdr *hdrp)
 	hdrp->compat_features = htole32(hdrp->compat_features);
 	hdrp->incompat_features = htole32(hdrp->incompat_features);
 	hdrp->ro_compat_features = htole32(hdrp->ro_compat_features);
+	hdrp->arch_flags.alignment_desc =
+		htole64(hdrp->arch_flags.alignment_desc);
+	hdrp->arch_flags.e_machine = htole16(hdrp->arch_flags.e_machine);
 	hdrp->crtime = htole64(hdrp->crtime);
 	hdrp->checksum = htole64(hdrp->checksum);
 }
@@ -939,6 +943,7 @@ ask(char op, char *answers, char def_ans, const char *fmt, va_list ap)
 	char ans = '\0';
 	if (op != '?')
 		return op;
+	int is_tty = isatty(fileno(stdin));
 	do {
 		vprintf(fmt, ap);
 		size_t len = strlen(answers);
@@ -948,7 +953,7 @@ ask(char op, char *answers, char def_ans, const char *fmt, va_list ap)
 		for (i = 0; i < len; i++) {
 			char ans = tolower(answers[i]);
 			printf("%c", ans == def_ansl ? toupper(ans) : ans);
-			if (i != len -1)
+			if (i != len - 1)
 				printf("/");
 		}
 		printf("] ");
@@ -956,7 +961,11 @@ ask(char op, char *answers, char def_ans, const char *fmt, va_list ap)
 		if (ans != '\n')
 			getchar();
 	} while (ans != '\n' && strchr(answers, ans) == NULL);
-	return ans == '\n' ? def_ans : ans;
+
+	char ret = ans == '\n' ? def_ans : ans;
+	if (!is_tty)
+		printf("%c\n", ret);
+	return ret;
 }
 
 char
@@ -1462,7 +1471,7 @@ pool_set_file_read(struct pool_set_file *file, void *buff,
 	if (off + nbytes > file->size)
 		return -1;
 
-	memcpy(buff, file->addr + off, nbytes);
+	memcpy(buff, (char *)file->addr + off, nbytes);
 
 	return 0;
 }
@@ -1477,7 +1486,7 @@ pool_set_file_write(struct pool_set_file *file, void *buff,
 	if (off + nbytes > file->size)
 		return -1;
 
-	memcpy(file->addr + off, buff, nbytes);
+	memcpy((char *)file->addr + off, buff, nbytes);
 
 	return 0;
 }
@@ -1511,7 +1520,7 @@ pool_set_file_map(struct pool_set_file *file, off_t offset)
 {
 	if (file->addr == MAP_FAILED)
 		return NULL;
-	return file->addr + offset;
+	return (char *)file->addr + offset;
 }
 
 /*

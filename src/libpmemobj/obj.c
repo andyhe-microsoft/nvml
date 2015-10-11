@@ -52,10 +52,9 @@
 #include "valgrind_internal.h"
 
 static struct cuckoo *pools;
-#ifndef WIN32
+
 int _pobj_cache_invalidate;
 __thread struct _pobj_pcache _pobj_cached_pool;
-#endif
 
 /*
  * obj_init -- initialization of obj

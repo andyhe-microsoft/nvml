@@ -1034,10 +1034,8 @@ util_replica_create(struct pool_set *set, unsigned repidx, int flags,
 
 	/* determine a hint address for mmap() */
 	char *addr = util_map_hint(rep->repsize); /* XXX - randomize */
-	if (addr == NULL) {
-		ERR("cannot find a contiguous region of given size");
-		return -1;
-	}
+	if (addr == NULL)
+		LOG(2, "cannot find a contiguous region of given size");
 
 	/* map the first part and reserve space for remaining parts */
 	if (util_map_part(&rep->part[0], addr, rep->repsize, 0, flags) != 0) {
@@ -1215,10 +1213,8 @@ util_replica_open(struct pool_set *set, unsigned repidx, int flags,
 
 	/* determine a hint address for mmap() */
 	char *addr = util_map_hint(rep->repsize); /* XXX - randomize */
-	if (addr == NULL) {
-		ERR("cannot find a contiguous region of given size");
-		return -1;
-	}
+	if (addr == NULL)
+		LOG(2, "cannot find a contiguous region of given size");
 
 	/* map the first part and reserve space for remaining parts */
 	if (util_map_part(&rep->part[0], addr, rep->repsize, 0, flags) != 0) {

@@ -48,7 +48,7 @@
 #include "out.h"
 #include "ctree.h"
 
-#define	BIT_IS_SET(n, i) (!!((n) & (1L << (i))))
+#define	BIT_IS_SET(n, i) (!!((n) & (1ULL << (i))))
 
 #define	KEY_LEN 64
 
@@ -78,7 +78,10 @@ struct ctree {
 static int
 find_crit_bit(uint64_t lhs, uint64_t rhs)
 {
-	return 64 - __builtin_clzll(lhs ^ rhs) - 1;
+	uint64_t val = lhs ^ rhs;
+	ASSERTne(val, 0);
+
+	return 64 - __builtin_clzll(val) - 1;
 }
 
 /*
